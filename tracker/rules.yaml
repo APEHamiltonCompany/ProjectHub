@@ -1,0 +1,58 @@
+business_days_per_week: 5
+triggers:
+  - id: assignment
+    stage: Pre-Kickoff
+    subject_regex: '^\s*(RE:|FW:|FWD:)?\s*Project Assignment\s*-'
+    no_reply: true
+  - id: kickoff
+    stage: Design
+    subject_regex: 'kick\s?off'
+  - id: internal_design_review
+    stage: Design Review
+    subject_regex: 'internal\s+(design\s+)?review'
+  - id: design_review
+    stage: Apps Plan
+    subject_regex: 'design\s+review'
+    exclude_regex: 'internal\s+(design\s+)?review'
+  - id: work_order_firm
+    stage: Fabrication/Test
+    subject_regex: 'work\s+order\s+firm|WO\s+firm'
+  - id: closeout
+    stage: Closeout
+    subject_regex: 'close\s?out'
+stages:
+  - Pre-Fabrication
+  - System Test
+  - Closeout
+  - Completion
+workflow:
+  - {id: review_cpr_so, stage: Pre-Fabrication, title: "Review CPR/SO in D365", trigger: assignment, offset: 2}
+  - {id: ace_questions, stage: Pre-Fabrication, title: "Kickoff pre-work questions to ACE", trigger: assignment, offset: 2}
+  - {id: time_estimate, stage: Pre-Fabrication, title: "Time estimate + RMT; reply to assignment email with link", trigger: assignment, offset: 2}
+  - {id: adp_start, stage: Pre-Fabrication, title: "Start ADP/APC draft (post to SharePoint)"}
+  - {id: kickoff_meeting, stage: Pre-Fabrication, title: "Kickoff: review CPR, time estimates and demo agreement; update Apps Plan"}
+  - {id: wiring_diagram, stage: Pre-Fabrication, title: "Wiring diagram (.jpg to ME, .drawio to project page)", trigger: kickoff, offset: 1}
+  - {id: test_matrix, stage: Pre-Fabrication, title: "Test matrix in design review slides", trigger: internal_design_review, offset: 1}
+  - {id: design_review, stage: Pre-Fabrication, title: "Design review: present wiring diagram + test matrix; update RMT"}
+  - {id: apps_plan, stage: Pre-Fabrication, title: "Finish Apps Plan, send to ACE, post SO parts excel, email PM", trigger: design_review, offset: 5}
+  - {id: parts_for_testing, stage: Pre-Fabrication, title: "Parts Required for Testing list; email PC/PM/ME", trigger: work_order_firm, offset: 5}
+  - {id: app_dev, stage: System Test, title: "Preliminary applications development (controllers, simulated apps)"}
+  - {id: system_setup, stage: System Test, title: "System setup: unpack, photos, Vendor Device Cable sheet, Multiflex"}
+  - {id: device_testing, stage: System Test, title: "Device handoff and functionality testing"}
+  - {id: app_troubleshooting, stage: System Test, title: "Applications and system troubleshooting (per FAT document)"}
+  - {id: ifat, stage: System Test, title: "Internal FAT (iFAT)"}
+  - {id: fat, stage: System Test, title: "FAT / test demonstration (distribute video)"}
+  - {id: post_fat, stage: System Test, title: "Post-FAT action items; demo for shipment approval"}
+  - {id: pack_up, stage: System Test, title: "Pack up: wire routing docs, closeout photos"}
+  - {id: co_methods, stage: Closeout, title: "Methods posted to project page"}
+  - {id: co_labware, stage: Closeout, title: "Labware posted to project page"}
+  - {id: co_support_docs, stage: Closeout, title: "Integration support documents posted"}
+  - {id: co_parts_list, stage: Closeout, title: "Parts list entry updated and complete"}
+  - {id: co_software, stage: Closeout, title: "Device controller / installers published (when applicable)"}
+  - {id: co_adp_results, stage: Closeout, title: "Apps Plan (ADP) completed with results"}
+  - {id: co_uv, stage: Closeout, title: "UV reports posted (when applicable)"}
+  - {id: co_wiki, stage: Closeout, title: "Device wiki pages updated (when applicable)"}
+  - {id: co_fat_templates, stage: Closeout, title: "FAT HW test templates updated (when applicable)"}
+  - {id: closeout_reply, stage: Closeout, title: "Reply to PM closeout email (docs posted)", trigger: closeout, offset: 5}
+  - {id: retrospective, stage: Completion, title: "Retrospective with PM/engineer"}
+  - {id: post_support, stage: Completion, title: "Installation / SAT support"}

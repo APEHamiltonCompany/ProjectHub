@@ -1,0 +1,6 @@
+pyyaml
+extract-msg
+plotly
+tzlocal
+pywin32
+flask

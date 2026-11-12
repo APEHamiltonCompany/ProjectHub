@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Projects - Project Hub{% endblock %}
+{% block page_title %}Projects{% endblock %}
+{% block content %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Create project manually</h2></div>
+  <p class="small muted">Creates the project folder, note and time-estimate sheet from the template. Add links (SharePoint, email, etc.) on the project page afterwards.</p>
+  <form id="manual-project" autocomplete="off">
+    <div class="manual-grid">
+      <label><span>Customer</span><input type="text" name="customer" required></label>
+      <label><span>SO numbers</span><input type="text" name="so" placeholder="SO-12345, SO-12346"></label>
+      <label><span>QTE numbers</span><input type="text" name="qte" placeholder="QTE-123456"></label>
+      <label><span>Project #</span><input type="text" name="project_no" placeholder="7 digits, optional"></label>
+      <label><span>Description</span><input type="text" name="description"></label>
+      <label><span>Level</span>
+        <select name="level">
+          <option value=""></option>
+          <option value="L1">L1</option>
+          <option value="L2">L2</option>
+          <option value="L3">L3</option>
+        </select>
+      </label>
+      <label><span>Folder name</span><input type="text" name="folder_name" placeholder="auto from customer / SO / project #"></label>
+    </div>
+    <button type="button" class="btn primary" data-action="manual-create">Create project</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Test the new-assignment workflow</h2></div>
+  <p class="small muted">Adds a fake assignment to the dashboard banner so you can try Create, Link and Dismiss without waiting for an email. Creating it makes a real folder in the vault; delete it here afterwards.</p>
+  <button type="button" class="btn" data-action="simulate-pending">Simulate new assignment</button>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Pending assignments</h2><span class="small muted">{{ pending|length }}</span></div>
+  {% if pending %}
+  <ul class="small">
+    {% for entry in pending %}<li>{{ entry.subject }}{% if entry.test %} <span class="badge level">TEST</span>{% endif %}</li>{% endfor %}
+  </ul>
+  <p class="small"><a href="{{ url_for('dashboard') }}">Create, link or dismiss them on the Dashboard</a></p>
+  {% else %}
+  <p class="small muted">Nothing waiting. <a href="{{ url_for('dashboard') }}">Dashboard</a></p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Projects</h2><span class="small muted">{{ rows|length }}</span></div>
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead>
+        <tr>
+          <th>Project</th><th>Customer</th><th>SO/QTE</th><th>Stage</th><th>Open</th><th>Last email</th><th>Folder</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><a href="{{ url_for('project_page', key=row.key) }}">{{ row.name }}</a><div class="small muted">{{ row.project_no }}</div></td>
+          <td>{{ row.customer }}</td>
+          <td class="nowrap">{{ row.ident }}</td>
+          <td>{{ row.stage }}</td>
+          <td class="nowrap">{{ row.open_count }}</td>
+          <td class="nowrap">{{ row.last_email }}</td>
+          <td class="small muted">{{ row.folder }}</td>
+          <td class="nowrap">
+            <button type="button" class="btn small" data-action="project-open-folder" data-key="{{ row.key }}" data-what="folder">Open folder</button>
+            <button type="button" class="btn small" data-action="project-archive" data-key="{{ row.key }}">Archive</button>
+            <button type="button" class="btn small danger" data-action="project-delete" data-key="{{ row.key }}" data-name="{{ row.name }}">Delete</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not rows %}<p class="small muted">No projects indexed yet.</p>{% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Archived</h2><span class="small muted">{{ archived|length }}</span></div>
+  {% if archived %}
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead><tr><th>Folder</th><th></th></tr></thead>
+      <tbody>
+      {% for name in archived %}
+        <tr>
+          <td>{{ name }}</td>
+          <td class="nowrap">
+            <button type="button" class="btn small" data-action="project-open-folder" data-where="archive" data-name="{{ name }}">Open folder</button>
+            <button type="button" class="btn small" data-action="project-restore" data-name="{{ name }}">Restore</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="small muted">Nothing archived.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Deleted</h2><span class="small muted">{{ deleted|length }}</span></div>
+  <p class="small muted">Deleted projects are moved to <span class="mono">{{ backup_root }}\deleted_projects</span>, never erased.</p>
+  {% if deleted %}
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead><tr><th>Backup</th><th></th></tr></thead>
+      <tbody>
+      {% for name in deleted %}
+        <tr>
+          <td>{{ name }}</td>
+          <td class="nowrap">
+            <button type="button" class="btn small" data-action="project-open-folder" data-where="deleted" data-name="{{ name }}">Open folder</button>
+            <button type="button" class="btn small" data-action="project-restore-deleted" data-name="{{ name }}">Restore</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="small muted">Nothing deleted.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

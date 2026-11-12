@@ -1,0 +1,24 @@
+<details class="panel collapsible">
+  <summary><span>Unclassified emails</span><span class="small muted">{{ unmatched|length }}</span></summary>
+  {% if unmatched %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Subject</th><th>Reason</th><th>Classify</th></tr></thead>
+      <tbody>
+      {% for entry in unmatched %}
+        <tr>
+          <td class="nowrap">{{ entry.date }}</td>
+          <td>{% if entry.open %}<a href="#" data-action="open-email" data-message-id="{{ entry.message_id }}">{{ entry.subject }}</a> <button type="button" class="btn small ghost" data-action="open-email" data-message-id="{{ entry.message_id }}">Open</button>{% else %}{{ entry.subject }} <span class="small muted">(refresh to enable open)</span>{% endif %}</td>
+          <td class="small muted">{{ entry.reason }}{% if entry.override %}<br>current: {{ entry.override }}{% endif %}</td>
+          <td class="nowrap">
+            {% for trigger_id, label in classify_choices %}
+            <button type="button" class="btn small" data-action="classify" data-message-id="{{ entry.message_id }}" data-trigger="{{ trigger_id }}">{{ label }}</button>
+            {% endfor %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<p class="muted">none</p>{% endif %}
+</details>

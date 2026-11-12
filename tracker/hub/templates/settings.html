@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Settings - Project Hub{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block content %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Refresh</h2></div>
+  <div class="field-row">
+    <label class="field"><span>Auto refresh interval (minutes, 0 = off)</span><input type="number" id="set-refresh" min="0" max="1440" value="{{ settings.refresh_minutes }}"></label>
+  </div>
+  <label class="check-field"><input type="checkbox" id="set-auto-reload"{% if settings.auto_reload_pages %} checked{% endif %}><span>Reload open hub pages after each refresh</span></label>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Appearance</h2></div>
+  <div class="field-row">
+    <label class="field"><span>Theme</span>
+      <select id="set-theme">
+        <option value="system"{% if settings.theme == "system" %} selected{% endif %}>System</option>
+        <option value="light"{% if settings.theme == "light" %} selected{% endif %}>Light</option>
+        <option value="dark"{% if settings.theme == "dark" %} selected{% endif %}>Dark</option>
+      </select>
+    </label>
+    <label class="field"><span>Default zoom</span>
+      <select id="set-zoom">
+        {% for value in zooms %}<option value="{{ value }}"{% if settings.ui.zoom == value %} selected{% endif %}>{{ value }}%</option>{% endfor %}
+      </select>
+    </label>
+    <label class="field"><span>Default dashboard layout</span>
+      <select id="set-layout">
+        {% for name in layouts %}<option value="{{ name }}"{% if settings.ui.layout == name %} selected{% endif %}>{{ name|capitalize }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <label class="check-field"><input type="checkbox" id="set-fit"{% if settings.ui.fit %} checked{% endif %}><span>Fit board columns to the window</span></label>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Tasks</h2></div>
+  <div class="field-row">
+    <label class="field"><span>Due soon window (days)</span><input type="number" id="set-due-soon" min="0" max="60" value="{{ settings.due_soon_days }}"></label>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Folders</h2></div>
+  <div class="field-row">
+    <label class="field"><span>Project notes folder (.md vault)</span><input type="text" id="set-vault" value="{{ settings.vault }}"></label>
+  </div>
+  <div class="field-row">
+    <label class="field"><span>Personal tasks file</span><input type="text" id="set-personal" value="{{ settings.personal_tasks_path }}"></label>
+  </div>
+  <div class="field-row">
+    <label class="field"><span>TimeEstimates template</span><input type="text" id="set-template" value="{{ settings.time_estimate_template }}"></label>
+  </div>
+  <div class="field-row">
+    <label class="field"><span>Tracker sheet (file or folder)</span><input type="text" id="set-ape-sheet" value="{{ settings.ape_sheet_path }}"></label>
+  </div>
+  <p class="small muted">Leave a path empty to fall back to the value in the config file.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Files</h2></div>
+  <p class="small muted">Config file: <span class="mono">{{ config_path }}</span></p>
+  <p class="small muted">Settings file: <span class="mono">{{ settings_path }}</span></p>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Save</h2></div>
+  <button type="button" class="btn primary" id="settings-save">Save settings</button>
+</section>
+
+{% endblock %}

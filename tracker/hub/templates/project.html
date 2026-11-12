@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ project.name }} - Project Hub{% endblock %}
+{% block page_title %}{{ project.name }}{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js"></script>{% endblock %}
+{% block content %}
+
+<section class="panel hero">
+  <div class="hero-main">
+    <div class="hero-title">
+      <h2>{{ project.name }}</h2>
+      {% if project.level %}<span class="badge level">{{ project.level }}</span>{% endif %}
+    </div>
+    <div class="small muted">
+      customer {{ project.customer or "?" }}
+      &middot; SO/QTE {{ (project.so or [])|join(", ") }}{% if project.qte %}{% if project.so %} / {% endif %}{{ project.qte|join(", ") }}{% endif %}
+      &middot; project no {{ project.project_no or "?" }}
+    </div>
+    <ol class="stepper">
+      {% for stage in stages %}
+      <li class="step{% if stage == project.stage %} current{% endif %}">{{ stage }}</li>
+      {% endfor %}
+      {% if project.stage and project.stage not in stages %}
+      <li class="step current">{{ project.stage }}</li>
+      {% endif %}
+    </ol>
+    <div class="hero-meta">
+      <div><span class="small muted">Ship date</span><div>{{ ship or "n/a" }} {{ macros.ship_badge(ship_days) }}{% if project.ship_source == "sheet" %}<span class="small muted"> (from sheet)</span>{% endif %}</div></div>
+      <div><span class="small muted">Design need-by</span><div>{{ design or "n/a" }}{% if design_days is not none %}<span class="small muted"> ({{ design_days }}d)</span>{% endif %}</div></div>
+      <div><span class="small muted">Stage</span><div>{{ project.stage or "?" }}</div></div>
+      <div><span class="small muted">Team</span><div>{{ macros.avatars(project.team) }}</div></div>
+    </div>
+  </div>
+  <div class="hero-actions">
+    <button type="button" class="btn primary" id="open-tab-group" data-key="{{ project.key }}">Open as tab group</button>
+    <button type="button" class="btn" data-action="open-all">Open all links</button>
+    <button type="button" class="btn" data-action="open" data-key="{{ project.key }}" data-what="folder">Open folder</button>
+    <button type="button" class="btn" data-action="open" data-key="{{ project.key }}" data-what="note">Open note in editor</button>
+    <button type="button" class="btn" data-action="new-task" data-key="{{ project.key }}">+ New task</button>
+  </div>
+</section>
+
+<div class="project-grid">
+  <div class="project-main">
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Deadlines</h2><span class="small muted">{{ tasks|length }}</span>
+        <div class="tabs task-view-toggle">
+          <button type="button" class="btn small active" data-task-view="phase">By phase</button>
+          <button type="button" class="btn small" data-task-view="due">By due date</button>
+        </div>
+      </div>
+      <ul class="task-list task-list-flat" hidden></ul>
+      {% for group in groups %}
+      {% set done = group.tasks|selectattr("mark", "equalto", "x")|list|length %}
+      <details class="stage-group" open>
+        <summary><span>{{ group.stage }}</span><span class="small muted">{{ done }}/{{ group.tasks|length }}</span></summary>
+        <ul class="task-list">
+          {% for task in group.tasks %}
+          <li class="task-row" data-uid="{{ task.uid }}" data-mark="{{ task.mark }}" data-status="{{ task.status }}"
+              data-due="{{ task.due or '' }}" data-task-id="{{ task.id }}">
+            {{ macros.tick(task) }}
+            <div class="task-body">
+              <div class="task-title">{{ task.title }}{% if task.kind == "manual" %}<span class="tag">manual</span>{% endif %}<span class="tag stage-tag">{{ group.stage }}</span></div>
+              {% if task.notes %}<div class="small muted">{{ task.notes }}</div>{% endif %}
+              {% if task.override_note %}<div class="small muted">{{ task.override_note }}</div>{% endif %}
+              {% if task.kind == "manual" %}{{ macros.manual_actions(task) }}{{ macros.manual_edit(task) }}{% endif %}
+            </div>
+            <div class="task-meta">
+              <span class="nowrap">{{ task.due or "" }}{% if task.override_due %}<span class="small muted"> (override)</span>{% elif task.computed_due %}<span class="small muted"> (computed)</span>{% endif %}</span>
+              {{ macros.status_pill(task.status) }}
+            </div>
+            {% if task.mark == " " and task.id %}
+            <div class="due-adjust">
+              <button type="button" class="btn small ghost" data-action="due-toggle">&#8943; adjust</button>
+              <div class="due-controls" hidden>
+                <input type="date" class="due-input" data-task-id="{{ task.id }}" value="{{ task.override_due or '' }}" aria-label="Override date">
+                <input type="text" class="due-note" data-task-id="{{ task.id }}" value="{{ task.override_note }}" placeholder="blocked: ..." aria-label="Override note">
+                <button type="button" class="btn small" data-action="due-set" data-task-id="{{ task.id }}">Set</button>
+                <button type="button" class="btn small" data-action="due-clear" data-task-id="{{ task.id }}">Clear</button>
+              </div>
+            </div>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endfor %}
+
+      <div class="task-form" data-key="{{ project.key }}">
+        <input type="text" class="task-desc" placeholder="Description" maxlength="300" aria-label="Description">
+        <input type="date" class="task-due" aria-label="Due date">
+        <input type="text" class="task-notes" placeholder="Notes (optional)" maxlength="1000" aria-label="Notes">
+        <button type="button" class="btn primary" data-action="task-add">Add task</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Note</h2>
+        <div class="tabs">
+          <button type="button" class="btn active" data-tab="rendered">Rendered</button>
+          {% if note.exists %}<button type="button" class="btn" data-tab="live">Live edit</button>{% endif %}
+          <button type="button" class="btn" data-tab="edit">Edit text</button>
+        </div>
+      </div>
+      <div class="tab-body" data-tab-body="rendered">
+        {% if note.exists %}
+        <div class="note-lines">
+          {% for row in note.lines %}
+            {% if row.kind == "check" %}
+            <div class="line check-line">{{ macros.tick_note(row, project.key) }}</div>
+            {% elif row.kind == "heading" %}
+            <div class="line heading">{{ row.html }}</div>
+            {% else %}
+            <div class="line">{{ row.html }}</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted">No note file found for this project.</p>
+        {% endif %}
+      </div>
+      <div class="tab-body" data-tab-body="live" hidden>
+        <p class="muted small">Click any line to edit it. Enter adds a line, Backspace at the start joins it to the line above, arrow keys move between lines, Esc stops editing.</p>
+        <div class="live-editor" id="live-editor"></div>
+      </div>
+      <div class="tab-body" data-tab-body="edit" hidden>
+        <div class="editor-split">
+          <textarea id="note-text" spellcheck="false">{{ note.text }}</textarea>
+          <div class="note-preview" id="note-preview"></div>
+        </div>
+      </div>
+      <div class="note-savebar" id="note-savebar" hidden>
+        <div id="note-conflict" class="warn-box" hidden>
+          The note changed on disk since this page loaded.
+          <button type="button" class="btn small" id="note-reload">Reload (discard my edits)</button>
+          <button type="button" class="btn small danger" id="note-force">Overwrite anyway</button>
+        </div>
+        <div class="editor-foot">
+          <span id="note-dirty" class="hint" hidden>Unsaved changes</span>
+          <button type="button" class="btn primary" id="note-save" data-key="{{ project.key }}" data-hash="{{ note.hash }}">Save</button>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <aside class="project-side">
+
+    {% if project.sheet or ape_sheet.ok %}
+    <section class="panel">
+      <div class="panel-head"><h2>Tracker sheet</h2>{% if project.sheet %}<span class="small muted">{{ project.sheet.tab }} row {{ project.sheet.row }}</span>{% endif %}</div>
+      {% if project.sheet %}
+      <dl class="sheet-dl">
+        <dt>PM</dt><dd>{{ project.sheet.pm_name or project.sheet.pm or "-" }}</dd>
+        <dt>ME</dt><dd>{{ project.sheet.me_name or project.sheet.me or "-" }}</dd>
+        <dt>Support</dt><dd>{{ project.sheet.support_name or project.sheet.support or "-" }}</dd>
+        <dt>AE</dt><dd>{{ project.sheet.ae_name or project.sheet.ae or "-" }}</dd>
+        <dt>Sales manager</dt><dd>{{ project.sheet.sales_manager or "-" }}</dd>
+        <dt>Project ID</dt><dd>{{ project.sheet.project_id or "-" }}</dd>
+        <dt>Instrument</dt><dd>{{ project.sheet.instrument or "-" }}</dd>
+        <dt>Level</dt><dd>{{ project.sheet.level or "-" }}</dd>
+        <dt>APE lab build/test</dt><dd>{{ project.sheet.lab or "-" }}</dd>
+        <dt>SO status</dt>
+        <dd>{{ project.sheet.so_status or "-" }}{% if project.sheet_mismatch %}<span class="pill pill-sheet">differs from hub stage {{ project.stage }}</span>{% endif %}</dd>
+        <dt>Health</dt><dd>{{ project.sheet.health or "-" }}</dd>
+        <dt>Assigned</dt><dd>{{ project.sheet.assigned or "-" }}</dd>
+        <dt>Baseline delivery</dt><dd>{{ project.sheet.baseline or "-" }}</dd>
+        <dt>Ship date</dt><dd>{{ project.sheet.ship_date or "-" }}</dd>
+        <dt>Instr need-by</dt><dd>{{ project.sheet.need_by or "-" }}</dd>
+      </dl>
+      {% if project.sheet.comments %}<p class="small muted sheet-comments">{{ project.sheet.comments }}</p>{% endif %}
+      <p class="small muted">Read-only copy of the team tracker (file modified {{ ape_sheet.source_mtime }}). <a href="{{ ape_sheet.url }}" target="_blank" rel="noopener">Open sheet</a></p>
+      {% elif ape_sheet.ok %}
+      <p class="muted">Not found in the tracker sheet.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      <div class="panel-head"><h2>Links</h2><span class="small muted">{{ links|length }}</span></div>
+      <ul class="link-list">
+        {% for link in links %}
+        <li>
+          <span class="link-icon link-icon-{{ 'sharepoint' if link.title == 'Project page' else 'cpr' if link.title == 'CPR' else 'rmt' if link.title == 'Risk & Issues' else 'other' }}">{{ 'SP' if link.title == 'Project page' else 'CPR' if link.title == 'CPR' else 'RMT' if link.title == 'Risk & Issues' else 'LINK' }}</span>
+          <a class="link-item" href="{{ link.url }}" target="_blank" rel="noopener">{{ link.title }}</a>
+          {% if link.user %}
+          <button type="button" class="btn small ghost danger" data-action="link-remove" data-key="{{ project.key }}" data-url="{{ link.url }}">Remove</button>
+          {% endif %}
+        </li>
+        {% else %}
+        <li class="muted small">No links yet.</li>
+        {% endfor %}
+      </ul>
+      <div class="link-form">
+        <input type="text" class="link-title" data-key="{{ project.key }}" placeholder="Title" aria-label="Link title">
+        <input type="text" class="link-url" data-key="{{ project.key }}" placeholder="https://..." aria-label="Link url">
+        <button type="button" class="btn" data-action="link-add" data-key="{{ project.key }}">Add link</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      {% include "_gantt.html" %}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Emails</h2><span class="small muted">{{ emails|length }}</span></div>
+      {% if emails %}
+      <ul class="email-list">
+        {% for email in emails %}
+        <li>
+          <div class="small muted nowrap">{{ email.date }}</div>
+          <div>{% if email.open %}<a href="#" data-action="open-email" data-message-id="{{ email.message_id }}">{{ email.subject }}</a> <button type="button" class="btn small ghost" data-action="open-email" data-message-id="{{ email.message_id }}">Open</button>{% else %}{{ email.subject }} <span class="small muted">(refresh to enable open)</span>{% endif %}</div>
+          <div class="small muted">{{ email.sender_name }} &middot; {{ email.trigger }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted">none</p>{% endif %}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Folder files</h2><span class="small muted">{{ files|length }}</span></div>
+      {% if files %}
+      <ul class="file-list">
+        {% for file in files %}
+        <li><span class="file-name">{{ file.name }}</span><span class="small muted nowrap">{{ file.modified }}</span></li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted">none</p>{% endif %}
+    </section>
+
+  </aside>
+</div>
+
+{% endblock %}

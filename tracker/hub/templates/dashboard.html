@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Project Hub{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js"></script>{% endblock %}
+{% block content %}
+
+{% set sheet_kind_label = "OneDrive-synced copy" if ape_sheet.kind == "synced" else "Downloads copy" if ape_sheet.kind == "downloads" else "file from Settings" %}
+<p class="sheet-status-line{% if ape_sheet.stale or ape_sheet.warning %} stale{% endif %}">
+  {% if ape_sheet.ok %}
+  Tracker sheet: {{ sheet_kind_label }} &middot; modified {{ ape_sheet.source_mtime_label }} &middot; <a href="{{ ape_sheet.url }}" target="_blank" rel="noopener">Open sheet</a>
+  {% if ape_sheet.stale %}&middot; older than {{ ape_sheet.stale_hours }} h; sync the Tracking Documents folder with OneDrive so it stays current (see guide){% endif %}
+  {% if ape_sheet.warning %}&middot; {{ ape_sheet.warning }}{% endif %}
+  {% else %}
+  Tracker sheet: {{ ape_sheet.error or "not available" }} &mdash; set the path in <a href="{{ url_for('settings_page') }}">Settings</a>
+  {% if ape_sheet.warning %}&middot; {{ ape_sheet.warning }}{% endif %}
+  {% endif %}
+</p>
+
+{% include "_pending.html" %}
+{% include "_kpis.html" %}
+
+{% if layout == "timeline" %}
+{% include "_timeline.html" %}
+{% elif layout == "focus" %}
+{% include "_focus.html" %}
+{% else %}
+{% include "_board.html" %}
+{% endif %}
+
+{% if layout != "focus" %}
+{% include "_unmatched.html" %}
+{% endif %}
+
+{% endblock %}

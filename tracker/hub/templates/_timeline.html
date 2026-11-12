@@ -1,0 +1,36 @@
+{% import "_macros.html" as macros %}
+<section class="panel">
+  {% include "_gantt.html" %}
+</section>
+
+<section class="panel">
+  {% include "_tasks_table.html" %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Projects</h2><span class="small muted">{{ project_cards|length }}</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Project</th><th>Customer</th><th>Project #</th><th>SO/QTE</th><th>Stage</th><th>Progress</th><th>Ship</th><th>Next due</th></tr></thead>
+      <tbody>
+      {% for card in project_cards %}
+        <tr>
+          <td><a href="{{ url_for('project_page', key=card.key) }}">{{ card.name }}</a></td>
+          <td>{{ card.customer }}</td>
+          <td class="nowrap">{{ card.project_no }}</td>
+          <td class="nowrap">{{ card.ident }}</td>
+          <td>{{ card.stage or "Other" }}</td>
+          <td class="nowrap">
+            <div class="progress"><span style="width: {{ card.progress_pct }}%"></span></div>
+            <span class="small muted">{{ card.done }}/{{ card.total }} &middot; {{ card.progress_pct }}%</span>
+          </td>
+          <td class="nowrap">{{ card.ship_date or "" }} {{ macros.ship_badge(card.ship_days) }}</td>
+          <td class="nowrap">{% if card.next_due %}{{ card.next_due.due }} {{ card.next_due.title }}{% else %}<span class="muted">none</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% include "_my_tasks.html" %}

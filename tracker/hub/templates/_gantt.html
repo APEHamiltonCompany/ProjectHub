@@ -1,0 +1,8 @@
+<div class="gantt-block">
+  <div class="panel-head">
+    <h2>Timeline</h2>
+    <span class="small muted">{{ gantt|length }} dated tasks</span>
+  </div>
+  <div class="gantt" id="gantt" data-window="{{ window_days|default(0) }}"></div>
+  <script type="application/json" id="gantt-data">{{ gantt|tojson }}</script>
+</div>

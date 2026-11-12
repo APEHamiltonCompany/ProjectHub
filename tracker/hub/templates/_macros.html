@@ -1,0 +1,99 @@
+{% macro status_pill(status) -%}
+<span class="pill pill-{{ status }}">{{ {"overdue": "Overdue", "due-soon": "Due soon", "upcoming": "Upcoming", "done": "Done", "not-needed": "N/A", "open": "No date"}.get(status, status) }}</span>
+{%- endmacro %}
+
+{% macro tick(item) -%}
+<span class="tick mark-{{ 'open' if item.mark == ' ' else 'x' if item.mark == 'x' else 'dash' }}" data-action="task-toggle"
+      data-key="{{ item.key }}" data-mark="{{ item.mark }}" data-uid="{{ item.uid }}"
+      {% if item.id %}data-id="{{ item.id }}"{% endif %}
+      {% if item.line_index is not none %}data-index="{{ item.line_index }}" data-line="{{ item.line }}"{% endif %}>
+  <input type="checkbox" class="tick-box"{% if item.mark == 'x' %} checked{% endif %} aria-label="Done">
+  <button type="button" class="tick-na" title="Not needed" aria-label="Not needed">N/A</button>
+</span>
+{%- endmacro %}
+
+{% macro tick_note(row, key) -%}
+<span class="tick mark-{{ 'open' if row.mark == ' ' else 'x' if row.mark == 'x' else 'dash' }}" data-action="toggle" data-key="{{ key }}"
+      data-index="{{ row.index }}" data-line="{{ row.line }}" data-mark="{{ row.mark }}"
+      {% if row.task_id %}data-task-id="{{ row.task_id }}"{% endif %}>
+  <input type="checkbox" class="tick-box"{% if row.mark == 'x' %} checked{% endif %} aria-label="Done">
+  <button type="button" class="tick-na" title="Not needed" aria-label="Not needed">N/A</button>
+  <span class="tick-text">{{ row.html }}</span>
+</span>
+{%- endmacro %}
+
+{% macro time_chip(item) -%}
+{% if item.hours and item.mark == "x" %}<button type="button" class="chip-time" data-action="time-edit" data-key="{{ item.key }}"{% if item.id %} data-id="{{ item.id }}"{% endif %}{% if item.line_index is not none %} data-index="{{ item.line_index }}" data-line="{{ item.line }}"{% endif %} data-hours="{{ item.hours_label }}" data-days="{{ item.worked_days|join(',') }}" title="Edit logged time">&#9201; {{ item.hours_label }}h</button>{% endif %}
+{%- endmacro %}
+
+{% macro ref_chip(item) -%}
+{% if item.ref %}<span class="chip-ref" title="SO / QTE">{{ item.ref }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro manual_actions(item) -%}
+<span class="row-actions">
+  <button type="button" class="btn small ghost" data-action="task-edit" data-key="{{ item.key }}" data-id="{{ item.id }}">Edit</button>
+  <button type="button" class="btn small ghost danger" data-action="task-delete" data-key="{{ item.key }}" data-id="{{ item.id }}">Delete</button>
+</span>
+{%- endmacro %}
+
+{% macro manual_edit(item) -%}
+{% set words = (item.recur or "").split() %}
+{% set kind = "day" if item.recur == "every day" else "weekday" if item.recur == "every weekday" else "week" if (words|length == 4 and words[1] == "week") else "2weeks" if (words|length == 5 and words[1]|int(-1) >= 2) else "month" if (words|length >= 4 and words[1] == "month") else "" %}
+{% set day = words[-1] if kind in ("week", "2weeks") else "Friday" %}
+<div class="task-edit" data-key="{{ item.key }}" data-id="{{ item.id }}" data-recur="{{ item.recur }}" hidden>
+  <input type="text" class="edit-desc" maxlength="300" value="{{ item.title }}" aria-label="Description">
+  <input type="date" class="edit-due" value="{{ item.due or '' }}" aria-label="Due date">
+  <select class="edit-repeat" aria-label="Repeat">
+    <option value=""{% if not kind %} selected{% endif %}>Does not repeat</option>
+    <option value="day"{% if kind == "day" %} selected{% endif %}>Every day</option>
+    <option value="weekday"{% if kind == "weekday" %} selected{% endif %}>Every weekday</option>
+    <option value="week"{% if kind == "week" %} selected{% endif %}>Every week</option>
+    <option value="2weeks"{% if kind == "2weeks" %} selected{% endif %}>Every 2 weeks</option>
+    <option value="month"{% if kind == "month" %} selected{% endif %}>Every month</option>
+  </select>
+  <select class="edit-weekday" aria-label="Weekday"{% if kind not in ("week", "2weeks") %} hidden{% endif %}>
+    {% for name in weekdays %}<option value="{{ name }}"{% if name == day %} selected{% endif %}>{{ name }}</option>{% endfor %}
+  </select>
+  {% if item.key == "" %}
+  <select class="edit-category" aria-label="Category">
+    {% for cid, label in categories if cid != "project" %}<option value="{{ cid }}"{% if item.category == cid %} selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <input type="text" class="edit-notes" maxlength="1000" value="{{ item.notes }}" placeholder="Notes" aria-label="Notes">
+  <input type="text" class="edit-ref" maxlength="20" value="{{ item.ref }}" placeholder="SO-123456 or QTE-123456" aria-label="SO / QTE">
+  <button type="button" class="btn small primary" data-action="task-save" data-key="{{ item.key }}" data-id="{{ item.id }}">Save</button>
+  <button type="button" class="btn small" data-action="task-cancel">Cancel</button>
+</div>
+{%- endmacro %}
+
+{% macro avatars(team) -%}
+<span class="avatars">
+  {% for member in team %}<span class="avatar" title="{{ member }}">{{ member.split()|map('first')|join('')|upper }}</span>{% endfor %}
+</span>
+{%- endmacro %}
+
+{% macro ship_badge(days) -%}
+{% if days is not none %}
+<span class="pill {{ 'pill-overdue' if days < 0 else 'pill-due-soon' if days <= 14 else 'pill-upcoming' }}">{% if days < 0 %}ship date passed{% else %}ships in {{ days }}d{% endif %}</span>
+{% else %}
+<span class="pill pill-open">no ship date</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro task_line(item) -%}
+<li class="task-row" data-uid="{{ item.uid }}" data-mark="{{ item.mark }}" data-status="{{ item.status }}"
+    {% if item.id %}data-task-id="{{ item.id }}"{% endif %}>
+  {{ tick(item) }}
+  <div class="task-body">
+    <div class="task-title" title="{{ item.title }}">{{ item.title }}{% if item.category and item.category != "project" %}<span class="tag tag-cat">{{ item.category_label }}</span>{% endif %}{% if item.recur %}<span class="tag tag-recur" title="{{ item.recur }}">&#128257; {{ item.recur_label }}</span>{% endif %}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{{ time_chip(item) }}{% if item.key == "" %}{{ ref_chip(item) }}{% endif %}</div>
+    {% if item.notes %}<div class="small muted">{{ item.notes }}</div>{% endif %}
+    {% if item.override_note %}<div class="small muted">{{ item.override_note }}</div>{% endif %}
+    {% if item.kind == "manual" %}{{ manual_actions(item) }}{{ manual_edit(item) }}{% endif %}
+  </div>
+  <div class="task-meta">
+    <span class="nowrap">{{ item.due or "" }}{% if item.days is not none %}<span class="small muted"> ({{ item.days }}d)</span>{% endif %}</span>
+    {{ status_pill(item.status) }}
+  </div>
+</li>
+{%- endmacro %}

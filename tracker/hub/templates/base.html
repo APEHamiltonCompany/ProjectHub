@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="hub-token" content="{{ token }}">
+<title>{% block title %}Project Hub{% endblock %}</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='hub.css') }}">
+{% block head %}{% endblock %}
+<script src="{{ url_for('static', filename='hub.js') }}" defer></script>
+</head>
+<body data-today="{{ today.isoformat() }}" data-due-soon="{{ due_soon_days }}" data-zoom="{{ ui.zoom }}" data-generated="{{ generated }}" data-auto-reload="{{ '1' if auto_reload_pages else '0' }}" class="{% if ui.fit %}fit-board{% endif %}">
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">PH</span><span class="brand-text">Project Hub</span></a>
+    <nav class="nav">
+      <a class="nav-item{% if request.endpoint == 'dashboard' %} active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a class="nav-item{% if request.endpoint == 'projects_page' %} active{% endif %}" href="{{ url_for('projects_page') }}">Projects</a>
+      <a class="nav-item{% if request.endpoint == 'timesheet_page' %} active{% endif %}" href="{{ url_for('timesheet_page') }}">Timesheet</a>
+      <a class="nav-item{% if request.endpoint == 'monday_page' %} active{% endif %}" href="{{ url_for('monday_page') }}">Monday update</a>
+      <a class="nav-item{% if request.endpoint == 'settings_page' %} active{% endif %}" href="{{ url_for('settings_page') }}">Settings</a>
+    </nav>
+    <div class="side-label">Projects</div>
+    <ul class="side-projects">
+      {% for row in nav_projects %}
+      <li><a href="{{ url_for('project_page', key=row.key) }}" title="{{ row.name }}"><span class="dot dot-{{ row.health }}"></span><span class="side-name">{{ row.name }}</span></a></li>
+      {% else %}
+      <li class="side-empty">none yet</li>
+      {% endfor %}
+    </ul>
+    <div class="side-foot">
+      {% if layout is defined %}
+      <div class="side-label">Layout</div>
+      {% if request.endpoint != 'dashboard' %}<div class="small muted">Dashboard only</div>{% endif %}
+      <div class="layout-switch{% if request.endpoint != 'dashboard' %} is-disabled{% endif %}" id="layout-switch"{% if request.endpoint != 'dashboard' %} title="Layouts only change the Dashboard view"{% endif %}>
+        <button type="button" class="layout-btn{% if layout == 'board' %} active{% endif %}" data-layout="board"{% if request.endpoint != 'dashboard' %} disabled aria-disabled="true"{% endif %}>Board</button>
+        <button type="button" class="layout-btn{% if layout == 'timeline' %} active{% endif %}" data-layout="timeline"{% if request.endpoint != 'dashboard' %} disabled aria-disabled="true"{% endif %}>Timeline</button>
+        <button type="button" class="layout-btn{% if layout == 'focus' %} active{% endif %}" data-layout="focus"{% if request.endpoint != 'dashboard' %} disabled aria-disabled="true"{% endif %}>Focus</button>
+      </div>
+      {% endif %}
+      <div class="side-refresh">
+        <button id="refresh-now" type="button" class="btn">Refresh now</button>
+        <span id="refresh-state" class="side-refresh-state" data-running="{{ '1' if running else '0' }}">Last refresh: {{ generated or "never" }}</span>
+      </div>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>{% block page_title %}Dashboard{% endblock %}</h1>
+        <div class="topbar-date">{{ today.strftime("%A, %d %B %Y") }}</div>
+      </div>
+      <div class="topbar-actions">
+        <label class="zoom-control"><span class="small muted">Zoom</span>
+          <select id="zoom-select" aria-label="Zoom">
+            {% for value in zooms %}<option value="{{ value }}"{% if ui.zoom == value %} selected{% endif %}>{{ value }}%</option>{% endfor %}
+          </select>
+        </label>
+        {% if request.endpoint == 'dashboard' and layout == 'board' %}
+        <button type="button" class="btn small{% if ui.fit %} active{% endif %}" id="fit-toggle" aria-pressed="{{ 'true' if ui.fit else 'false' }}">Fit columns</button>
+        {% endif %}
+        <button type="button" class="btn primary" id="new-task-open">+ New task</button>
+      </div>
+    </header>
+    <main class="content" style="zoom: {{ ui.zoom / 100 }}">
+{% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+<div id="new-task-modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="new-task-title">
+    <div class="modal-head">
+      <h2 id="new-task-title">New task</h2>
+      <button type="button" class="icon-btn" id="new-task-close" aria-label="Close">&times;</button>
+    </div>
+    <label class="field"><span>Description</span><input type="text" id="nt-desc" maxlength="300" placeholder="What needs doing?"></label>
+    <label class="field"><span>Category</span>
+      <select id="nt-category">
+        {% for cid, label in categories %}<option value="{{ cid }}"{% if (project is defined and cid == 'project') or (project is not defined and cid == 'personal') %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="field-row">
+      <label class="field"><span>Due date</span><input type="date" id="nt-due"></label>
+      <label class="field" id="nt-key-field"{% if project is not defined %} hidden{% endif %}><span>Project</span>
+        <select id="nt-key">
+          {% for row in nav_projects %}<option value="{{ row.key }}"{% if project is defined and project.key == row.key %} selected{% endif %}>{{ row.name }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <label class="field"><span>SO / QTE (optional)</span><input type="text" id="nt-ref" maxlength="20" placeholder="SO-123456 or QTE-123456"></label>
+    <div class="field-row">
+      <label class="field"><span>Repeat</span>
+        <select id="nt-repeat">
+          <option value="">Does not repeat</option>
+          <option value="day">Every day</option>
+          <option value="weekday">Every weekday</option>
+          <option value="week">Every week</option>
+          <option value="2weeks">Every 2 weeks</option>
+          <option value="month">Every month</option>
+        </select>
+      </label>
+      <label class="field" id="nt-weekday-field" hidden><span>Weekday</span>
+        <select id="nt-weekday">
+          {% for name in weekdays %}<option value="{{ name }}"{% if name == 'Friday' %} selected{% endif %}>{{ name }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="small muted" id="nt-repeat-hint">e.g. timesheet: Every week on Friday</div>
+    <label class="field"><span>Notes (optional)</span><textarea id="nt-notes" rows="3"></textarea></label>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="new-task-cancel">Cancel</button>
+      <button type="button" class="btn primary" id="new-task-submit">Add task</button>
+    </div>
+  </div>
+</div>
+
+<div id="hub-toast" class="toast" hidden></div>
+</body>
+</html>

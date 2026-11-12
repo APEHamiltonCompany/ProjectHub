@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Monday update - Project Hub{% endblock %}
+{% block page_title %}Monday update{% endblock %}
+{% block content %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Monday update</h2>
+    <span class="small muted">Since {{ start }} &middot; this week {{ week_start }} to {{ week_end }} &middot; today {{ today }}</span>
+  </div>
+  <button type="button" class="btn primary" id="copy-monday">Copy</button>
+</section>
+
+{% for block in blocks %}
+<section class="panel monday-card">
+  <div class="panel-head">
+    <h2>{% if block.project.key %}<a href="{{ url_for('project_page', key=block.project.key) }}">{{ block.project.name }}</a>{% else %}{{ block.project.name }}{% endif %}</h2>
+    <span class="chip">{{ block.project.stage or "?" }}</span>
+    {{ macros.ship_badge(block.ship_days) }}
+  </div>
+  <div class="monday-grid">
+    <div>
+      <h3>Since last Monday</h3>
+      {% if block.since or block.ticks %}
+      <ul class="small">
+        {% for line in block.since %}<li>{{ line }}</li>{% endfor %}
+        {% for line in block.ticks %}<li>{{ line }}</li>{% endfor %}
+      </ul>
+      {% else %}<p class="muted small">nothing new</p>{% endif %}
+    </div>
+    <div>
+      <h3>Due this week</h3>
+      {% if block.due_week %}
+      <ul class="task-list">{% for task in block.due_week %}{{ macros.task_line(task) }}{% endfor %}</ul>
+      {% else %}<p class="muted small">none</p>{% endif %}
+    </div>
+    <div>
+      <h3>Overdue</h3>
+      {% if block.overdue %}
+      <ul class="task-list">{% for task in block.overdue %}{{ macros.task_line(task) }}{% endfor %}</ul>
+      {% else %}<p class="muted small">none</p>{% endif %}
+    </div>
+  </div>
+</section>
+{% endfor %}
+
+<section class="panel" id="my-tasks">
+  <div class="panel-head"><h2>My tasks</h2></div>
+  {% set mine = tasks|selectattr("key", "equalto", "")|list %}
+  {% if mine %}
+  <ul class="task-list">{% for item in mine %}{{ macros.task_line(item) }}{% endfor %}</ul>
+  {% else %}<p class="muted">Nothing personal right now.</p>{% endif %}
+</section>
+
+<textarea id="monday-text" hidden>{{ plain }}</textarea>
+
+{% endblock %}

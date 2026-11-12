@@ -1,0 +1,21 @@
+{% import "_macros.html" as macros %}
+<section class="panel" id="my-tasks">
+  <div class="panel-head">
+    <h2>My tasks</h2>
+    <span class="small muted">{{ personal|length }}</span>
+  </div>
+  {% if personal %}
+  <div class="task-list">
+    {% for group in personal_groups %}
+    <div class="task-group">
+      <h3 class="task-group-head">{{ group.label }} <span class="count">{{ group.tasks|length }}</span></h3>
+      <ul class="task-list">
+        {% for item in group.tasks %}{{ macros.task_line(item) }}{% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">Nothing personal right now.</p>
+  {% endif %}
+</section>

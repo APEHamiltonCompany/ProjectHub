@@ -1,0 +1,33 @@
+{% for entry in pending %}
+{% set parsed = entry.parsed or {} %}
+<section class="pending" data-message-id="{{ entry.message_id }}">
+  <div class="pending-head">
+    <span class="badge">New assignment</span>
+    {% if entry.test %}<span class="badge level">TEST</span>{% endif %}
+    {% if entry.source == "sheet" %}<span class="badge level">FROM TRACKER SHEET</span>{% endif %}
+    <h3>{{ entry.subject }}</h3>
+  </div>
+  <div class="small muted">
+    received {{ entry.received }} &middot; customer {{ parsed.customer or "?" }}
+    &middot; SO/QTE {{ (parsed.so or [])|join(", ") }}{% if parsed.qte %}{% if parsed.so %} / {% endif %}{{ parsed.qte|join(", ") }}{% endif %}
+    &middot; project no {{ parsed.project_no or "?" }}
+    &middot; level {{ parsed.level or "?" }}
+  </div>
+  {% if entry.team %}<div class="chips" style="margin-top:6px">{% for member in entry.team %}<span class="chip">{{ member }}</span>{% endfor %}</div>{% endif %}
+  {% if entry.sharepoint %}<div class="small" style="margin-top:6px"><a href="{{ entry.sharepoint }}" target="_blank" rel="noopener">SharePoint project page</a></div>{% endif %}
+  <div class="row">
+    <input type="text" class="folder-input" data-message-id="{{ entry.message_id }}" value="{{ entry.suggested_folder or '' }}" aria-label="Folder name">
+    <button type="button" class="btn primary" data-action="create" data-message-id="{{ entry.message_id }}">Create project</button>
+    <button type="button" class="btn" data-action="preview" data-message-id="{{ entry.message_id }}">Preview note</button>
+  </div>
+  <div class="row">
+    <select class="link-select" data-message-id="{{ entry.message_id }}" aria-label="Existing folder">
+      <option value="">Link to existing folder...</option>
+      {% for folder in folders %}<option value="{{ folder }}">{{ folder }}</option>{% endfor %}
+    </select>
+    <button type="button" class="btn" data-action="link" data-message-id="{{ entry.message_id }}">Link to existing folder</button>
+    <button type="button" class="btn danger" data-action="dismiss" data-message-id="{{ entry.message_id }}">Dismiss</button>
+  </div>
+  <pre class="preview" data-message-id="{{ entry.message_id }}" hidden></pre>
+</section>
+{% endfor %}

@@ -1,0 +1,48 @@
+{% import "_macros.html" as macros %}
+<div class="table-block">
+  <div class="panel-head">
+    <h2>Tasks by due date</h2>
+    <div class="table-tools">
+      <input type="search" id="task-search" placeholder="Search tasks" aria-label="Search tasks">
+      <select id="task-category" aria-label="Category">
+        <option value="all">All categories</option>
+        {% for cid, label in categories %}<option value="{{ cid }}">{{ label }}</option>{% endfor %}
+      </select>
+      <div class="chips filter-chips" id="task-filters">
+        <button type="button" class="chip-btn active" data-filter="all">All</button>
+        <button type="button" class="chip-btn" data-filter="overdue">Overdue</button>
+        <button type="button" class="chip-btn" data-filter="due-soon">Due soon</button>
+        <button type="button" class="chip-btn" data-filter="open">Open</button>
+        <button type="button" class="chip-btn" data-filter="done">Done</button>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="tasks-table" id="tasks-table">
+      <thead>
+        <tr>
+          <th class="tick-col"></th>
+          <th>Project</th><th>SO/QTE</th><th>Stage</th>
+          <th>Task</th><th>Due</th><th>Days left</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for item in tasks %}
+        <tr class="task-row" data-uid="{{ item.uid }}" data-status="{{ item.status }}" data-mark="{{ item.mark }}"
+            data-category="{{ item.category }}"
+            data-due="{{ item.due or '' }}"{% if item.id %} data-task-id="{{ item.id }}"{% endif %}>
+          <td class="tick-col">{{ macros.tick(item) }}</td>
+          <td>{% if item.key %}<a href="{{ url_for('project_page', key=item.key) }}">{{ item.project_name }}</a>{% else %}<span class="muted">Personal</span>{% endif %}{% if item.customer or item.project_no %}<div class="small muted">{{ item.customer }}{% if item.customer and item.project_no %} &middot; {% endif %}{{ item.project_no }}</div>{% endif %}</td>
+          <td class="nowrap">{{ item.ident }}</td>
+          <td>{{ item.stage }}</td>
+          <td class="task-title">{{ item.title }}{% if item.recur %}<span class="tag tag-recur" title="{{ item.recur }}">&#128257; {{ item.recur_label }}</span>{% endif %}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{{ macros.time_chip(item) }}{% if item.key == "" %}{{ macros.ref_chip(item) }}{% endif %}{% if item.notes %}<div class="small muted">{{ item.notes }}</div>{% endif %}</td>
+          <td class="nowrap">{{ item.due or "" }}</td>
+          <td class="nowrap days-cell">{{ item.days if item.days is not none else "" }}</td>
+          <td class="nowrap status-cell">{{ macros.status_pill(item.status) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not tasks %}<p class="muted">No tasks yet.</p>{% endif %}
+</div>

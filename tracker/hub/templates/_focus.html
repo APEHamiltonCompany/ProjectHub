@@ -1,0 +1,68 @@
+{% import "_macros.html" as macros %}
+<div class="focus-grid">
+  <div class="focus-main">
+    {% for bucket in buckets %}
+    <section class="panel bucket">
+      <div class="panel-head"><h2>{{ bucket.label }}</h2><span class="small muted">{{ bucket.tasks|length }}</span></div>
+      {% if bucket.tasks %}
+      <ul class="task-list">
+        {% for item in bucket.tasks %}
+        <li class="task-row" data-uid="{{ item.uid }}" data-mark="{{ item.mark }}" data-status="{{ item.status }}"
+            data-due="{{ item.due or '' }}"{% if item.id %} data-task-id="{{ item.id }}"{% endif %}>
+          {{ macros.tick(item) }}
+          <div class="task-body">
+            <div class="task-title">{{ item.title }}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}</div>
+            {% if item.notes %}<div class="small muted">{{ item.notes }}</div>{% endif %}
+            {% if item.override_note %}<div class="small muted">{{ item.override_note }}</div>{% endif %}
+            {% if item.kind == "manual" %}{{ macros.manual_actions(item) }}{{ macros.manual_edit(item) }}{% endif %}
+          </div>
+          <div class="task-meta">
+            {% if item.key %}<a class="chip chip-project" href="{{ url_for('project_page', key=item.key) }}">{{ item.project_name }}</a>{% endif %}
+            <span class="nowrap">{{ item.due or "" }}{% if item.days is not none %}<span class="small muted"> ({{ item.days }}d)</span>{% endif %}</span>
+            {{ macros.status_pill(item.status) }}
+            <span class="quick-due">
+              <input type="date" class="quick-date" data-uid="{{ item.uid }}" value="{{ item.override_due or item.due or '' }}" aria-label="Set date">
+              <button type="button" class="btn small ghost" data-action="quick-due" data-uid="{{ item.uid }}"
+                      data-key="{{ item.key }}" data-id="{{ item.id }}" data-kind="{{ item.kind }}">Set date</button>
+            </span>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted small">none</p>{% endif %}
+    </section>
+    {% endfor %}
+
+    <details class="panel collapsible">
+      <summary><span>Done this week</span><span class="small muted">{{ done_week|length }}</span></summary>
+      <ul class="task-list">{% for item in done_week %}{{ macros.task_line(item) }}{% endfor %}</ul>
+    </details>
+
+    <details class="panel collapsible">
+      <summary><span>Show all tasks table</span><span class="small muted">{{ tasks|length }}</span></summary>
+      {% include "_tasks_table.html" %}
+    </details>
+  </div>
+
+  <aside class="focus-side">
+    <section class="panel">
+      <div class="panel-head"><h2>Projects</h2><span class="small muted">{{ project_cards|length }}</span></div>
+      <ul class="mini-projects">
+        {% for card in project_cards %}
+        <li>
+          <a href="{{ url_for('project_page', key=card.key) }}"><span class="dot dot-{{ 'bad' if card.overdue else 'warn' if card.due_soon else 'good' }}"></span><span class="side-name">{{ card.name }}</span></a>
+          {{ macros.ship_badge(card.ship_days) }}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="panel">
+      {% with window_days=42 %}{% include "_gantt.html" %}{% endwith %}
+    </section>
+
+    {% include "_my_tasks.html" %}
+
+    {% include "_unmatched.html" %}
+  </aside>
+</div>

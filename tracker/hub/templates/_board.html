@@ -1,0 +1,81 @@
+{% import "_macros.html" as macros %}
+<section class="board">
+  {% for column in board_columns %}
+  <div class="board-col{% if not column.cards %} is-empty{% endif %}">
+    <div class="board-col-head"><h2>{{ column.stage }}</h2><span class="count">{{ column.cards|length }}</span></div>
+    <div class="board-col-body">
+      {% for card in column.cards %}
+      <article class="card" data-key="{{ card.key }}">
+        <div class="card-stripe stripe-{{ 'bad' if card.overdue else 'warn' if card.due_soon else 'good' }}"></div>
+        <div class="card-head">
+          <a class="card-name" href="{{ url_for('project_page', key=card.key) }}">{{ card.name }}</a>
+          {% if card.level %}<span class="badge level">{{ card.level }}</span>{% endif %}
+        </div>
+        <div class="small muted">{{ card.customer }}{% if card.ident %} &middot; {{ card.ident }}{% endif %}</div>
+        <div class="card-row">
+          <span class="chip">{{ card.stage or "Other" }}</span>
+          {{ macros.ship_badge(card.ship_days) }}
+        </div>
+        <div class="progress" title="{{ card.done }}/{{ card.total }} done"><span style="width: {{ card.progress_pct }}%"></span></div>
+        <div class="card-row small muted">{{ card.done }}/{{ card.total }} done &middot; {{ card.progress_pct }}%</div>
+        <div class="card-row">
+          {% if card.overdue %}<span class="pill pill-overdue">{{ card.overdue }} overdue</span>{% endif %}
+          {% if card.due_soon %}<span class="pill pill-due-soon">{{ card.due_soon }} due soon</span>{% endif %}
+          {% if card.sheet.health in ("RISK", "ISSUE") %}<span class="pill pill-overdue">sheet: RISK</span>{% endif %}
+          {% if card.sheet_mismatch %}<span class="pill pill-sheet" title="Tracker sheet SO Status: {{ card.sheet.so_status }}">sheet: {{ card.sheet.so_status }}</span>{% endif %}
+        </div>
+        {% if card.next_due %}
+        <div class="card-next">
+          <div class="small muted">Next due</div>
+          <div class="task-row" data-uid="{{ card.next_due.item.uid }}" data-mark="{{ card.next_due.item.mark }}">
+            {{ macros.tick(card.next_due.item) }}
+            <div class="task-body"><div class="task-title" title="{{ card.next_due.title }}">{{ card.next_due.title }}</div></div>
+            <div class="task-meta"><span class="nowrap small">{{ card.next_due.due }}</span></div>
+          </div>
+        </div>
+        {% endif %}
+        <div class="card-foot">
+          {{ macros.avatars(card.team) }}
+          <div class="card-actions">
+            <a class="btn small" href="{{ url_for('project_page', key=card.key) }}">Open</a>
+            <button type="button" class="btn small open-tab-group-btn" data-key="{{ card.key }}">Open as tab group</button>
+            <button type="button" class="btn small ghost" data-action="card-expand" data-key="{{ card.key }}">Tasks</button>
+          </div>
+        </div>
+        <ul class="task-list card-tasks" data-key="{{ card.key }}" hidden>
+          {% for item in tasks if item.key == card.key and item.mark == " " and item.due and item.kind in ("workflow", "pm", "manual") %}
+          {{ macros.task_line(item) }}
+          {% endfor %}
+        </ul>
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="board-col board-col-personal">
+    <div class="board-col-head"><h2>My tasks</h2><span class="count">{{ personal|length }}</span></div>
+    <div class="board-col-body">
+      <div class="task-list" id="my-tasks">
+        {% for group in personal_groups %}
+        <div class="task-group">
+          <h3 class="task-group-head">{{ group.label }} <span class="count">{{ group.tasks|length }}</span></h3>
+          <ul class="task-list">
+            {% for item in group.tasks %}{{ macros.task_line(item) }}{% endfor %}
+          </ul>
+        </div>
+        {% endfor %}
+      </div>
+      {% if not personal %}<p class="muted small">Nothing personal right now.</p>{% endif %}
+    </div>
+  </div>
+</section>
+
+<details class="panel collapsible" open>
+  <summary><span>Timeline</span><span class="small muted">{{ gantt|length }} dated tasks</span></summary>
+  {% include "_gantt.html" %}
+</details>
+
+<details class="panel collapsible">
+  <summary><span>Tasks by due date</span><span class="small muted">{{ tasks|length }}</span></summary>
+  {% include "_tasks_table.html" %}
+</details>

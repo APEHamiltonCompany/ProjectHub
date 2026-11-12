@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Setting up project - Project Hub{% endblock %}
+{% block page_title %}Setting up project{% endblock %}
+{% block content %}
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ folder }}</h2></div>
+  <p class="small muted">{{ folder }} was found but the hub hasn't indexed it yet. This page reloads automatically when the refresh finishes.</p>
+  <p class="small muted" id="project-loading-note">Waiting for the refresh to finish...</p>
+  <p class="small"><a href="{{ url_for('dashboard') }}">Back to the Dashboard</a></p>
+</section>
+
+<script>
+(function () {
+  "use strict";
+  var KEY = "hub-loading-{{ key }}";
+  var note = document.getElementById("project-loading-note");
+  var tries = parseInt(window.sessionStorage.getItem(KEY) || "0", 10);
+  if (isNaN(tries)) { tries = 0; }
+  if (tries >= 3) {
+    if (note) {
+      note.textContent = "The refresh has run " + tries + " times and the project still isn't indexed. Open the Dashboard and check output/hub_last_run.log.";
+    }
+    return;
+  }
+  function poll() {
+    fetch("/api/status").then(function (r) { return r.json(); }).then(function (data) {
+      if (data.running) {
+        window.setTimeout(poll, 1500);
+        return;
+      }
+      window.sessionStorage.setItem(KEY, String(tries + 1));
+      window.location.reload();
+    }).catch(function () { window.setTimeout(poll, 3000); });
+  }
+  window.setTimeout(poll, 1500);
+})();
+</script>
+
+{% endblock %}

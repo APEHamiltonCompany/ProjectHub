@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime output and logs
+output/
+*.log
+
+# Local runtime state and machine-specific settings
+tracker/state.json
+tracker/settings.json
+*.flock
+
+# Local backups and synced working data
+backups/
+data/
+
+# Inbound email drop (real work email)
+email_drop/*.eml
+*.eml
+
+# Agent config
+.abacusai/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
