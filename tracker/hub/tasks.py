@@ -39,7 +39,11 @@ HOURS_RE = re.compile(HOURS_EMOJI + r"\ufe0f?\s*(\d+(?:\.\d+)?)h")
 HOURS_STRIP_RE = re.compile(r"\s*" + HOURS_EMOJI + r"\ufe0f?\s*\d+(?:\.\d+)?h")
 DAYS_RE = re.compile(r"\[days::\s*([^\]]*)\]")
 DAYS_STRIP_RE = re.compile(r"\s*\[days::\s*[^\]]*\]")
+TIME_RE = re.compile(r"\[time::\s*([^\]]*)\]")
+TIME_STRIP_RE = re.compile(r"\s*\[time::\s*[^\]]*\]")
 REF_RE = re.compile(r"\[ref::\s*([^\]]*)\]")
+NOTE_RE = re.compile(r"\[note::\s*([^\]]*)\]")
+NOTE_STRIP_RE = re.compile(r"\s*\[note::\s*[^\]]*\]")
 REF_PATTERN = re.compile(r"^(SO|QTE)-\d+$")
 TOKEN_START_RE = re.compile(
     "|".join(re.escape(item) for item in META_EMOJI if not item.startswith(HOURS_EMOJI))
@@ -219,12 +223,16 @@ def parse_lines(text: str) -> list[dict]:
         title = CATEGORY_RE.sub(" ", title)
         title = META_RE.sub(" ", title)
         title = DAYS_RE.sub(" ", title)
+        title = TIME_RE.sub(" ", title)
         title = REF_RE.sub(" ", title)
+        title = NOTE_RE.sub(" ", title)
         tag = CATEGORY_RE.search(match.group(3))
         recur = RECUR_RE.search(match.group(3))
         hours = HOURS_RE.search(line)
         days = DAYS_RE.search(line)
+        time_entries = TIME_RE.search(line)
         ref = REF_RE.search(line)
+        note_token = NOTE_RE.search(line)
         rows.append(
             {
                 "index": index,
@@ -239,7 +247,9 @@ def parse_lines(text: str) -> list[dict]:
                 "recur": (canonical_rule(recur.group(1)) or "") if recur else "",
                 "hours": float(hours.group(1)) if hours else None,
                 "days": _parse_days(days.group(1)) if days else [],
+                "time": _parse_time(time_entries.group(1)) if time_entries else [],
                 "ref": ref.group(1).strip().upper() if ref else "",
+                "note": note_token.group(1).strip() if note_token else "",
             }
         )
     return rows
@@ -256,6 +266,24 @@ def _parse_days(raw: str) -> list[date]:
         except ValueError:
             continue
     return sorted(set(values))
+
+
+def _parse_time(raw: str) -> list[tuple[date, float]]:
+    values: list[tuple[date, float]] = []
+    for part in str(raw or "").split(","):
+        text = part.strip()
+        if not text:
+            continue
+        day_text, _sep, hours_text = text.partition("=")
+        try:
+            when = date.fromisoformat(day_text.strip())
+            hours = float(hours_text.strip())
+        except ValueError:
+            continue
+        if hours <= 0:
+            continue
+        values.append((when, hours))
+    return values
 
 
 def manual_line(
@@ -314,6 +342,7 @@ def update_manual(
     category=UNSET,
     recur=UNSET,
     ref=UNSET,
+    note=UNSET,
 ) -> str:
     lines = text.split("\n")
     index = _find_manual(lines, task_id)
@@ -324,11 +353,20 @@ def update_manual(
     new_category = row["category"] if category is UNSET else category
     new_recur = row["recur"] if recur is UNSET else recur
     new_ref = row["ref"] if ref is UNSET else ref
+    new_note = row["note"] if note is UNSET else note
     lines[index] = match.group(1) + match.group(2) + "] " + _line_body(
-        new_description, new_due, task_id, category=new_category, recur=new_recur, ref=new_ref or None
+        new_description,
+        new_due,
+        task_id,
+        category=new_category,
+        recur=new_recur,
+        ref=new_ref or None,
+        note=new_note or None,
     )
     if row["hours"] or row["days"]:
         lines[index] = _apply_time(lines[index], row["hours"], row["days"])
+    if row["time"]:
+        lines[index] = _apply_entries(lines[index], row["time"])
     if notes is not None:
         end = _notes_end(lines, index)
         lines[index + 1:end] = [notes_line(notes)] if notes else []
@@ -403,26 +441,62 @@ def set_time(
             raise ValueError("bad days")
     day_list = sorted(set(day_list))
     lines = text.replace("\r\n", "\n").split("\n")
-    if task_id:
-        index = None
-        for cursor, line in enumerate(lines):
-            if not CHECK_RE.match(line):
-                continue
-            ident = ID_RE.search(line)
-            if ident and ident.group(1) == task_id:
-                index = cursor
-                break
-        if index is None:
-            raise KeyError(task_id)
-    else:
-        if line_index is None or line_index < 0 or line_index >= len(lines):
-            raise ValueError("conflict")
-        if expected_line is None or lines[line_index] != expected_line:
-            raise ValueError("conflict")
-        index = line_index
+    index = _line_index(lines, task_id, line_index, expected_line)
     if not CHECK_RE.match(lines[index]):
         raise ValueError("conflict")
     lines[index] = _apply_time(lines[index], value, day_list)
+    new_text = "\n".join(lines)
+    return new_text, _row_at(lines, index)
+
+
+def add_time_entry(
+    text: str,
+    task_id: str | None = None,
+    line_index: int | None = None,
+    expected_line: str | None = None,
+    day: date | None = None,
+    hours=None,
+) -> tuple[str, dict]:
+    try:
+        value = float(hours)
+    except (TypeError, ValueError):
+        raise ValueError("bad hours")
+    if not 0 < value <= 24:
+        raise ValueError("bad hours")
+    if not isinstance(day, date):
+        raise ValueError("bad day")
+    lines = text.replace("\r\n", "\n").split("\n")
+    index = _line_index(lines, task_id, line_index, expected_line)
+    if not CHECK_RE.match(lines[index]):
+        raise ValueError("conflict")
+    row = _row_at(lines, index)
+    entries = list(row["time"]) + [(day, value)]
+    lines[index] = _apply_entries(lines[index], entries)
+    new_text = "\n".join(lines)
+    return new_text, _row_at(lines, index)
+
+
+def remove_time_entry(
+    text: str,
+    task_id: str | None = None,
+    line_index: int | None = None,
+    expected_line: str | None = None,
+    entry_index: int | None = None,
+) -> tuple[str, dict]:
+    try:
+        position = int(entry_index)
+    except (TypeError, ValueError):
+        raise ValueError("bad entry_index")
+    lines = text.replace("\r\n", "\n").split("\n")
+    index = _line_index(lines, task_id, line_index, expected_line)
+    if not CHECK_RE.match(lines[index]):
+        raise ValueError("conflict")
+    row = _row_at(lines, index)
+    entries = list(row["time"])
+    if position < 0 or position >= len(entries):
+        raise ValueError("bad entry_index")
+    del entries[position]
+    lines[index] = _apply_entries(lines[index], entries)
     new_text = "\n".join(lines)
     return new_text, _row_at(lines, index)
 
@@ -454,7 +528,13 @@ def spawn_next(text: str, task_id: str, today: date) -> tuple[str, dict | None]:
             return text, None
     new_id = new_manual_id()
     new_line = "- [ ] " + _line_body(
-        row["title"], due, new_id, category=row["category"] or None, recur=row["recur"], ref=row["ref"] or None
+        row["title"],
+        due,
+        new_id,
+        category=row["category"] or None,
+        recur=row["recur"],
+        ref=row["ref"] or None,
+        note=row["note"] or None,
     )
     notes_lines = lines[index + 1:_notes_end(lines, index)]
     lines[index:index] = [new_line] + notes_lines
@@ -473,6 +553,7 @@ def _line_body(
     category: str | None = None,
     recur: str | None = None,
     ref: str | None = None,
+    note: str | None = None,
 ) -> str:
     parts = [description]
     if ref:
@@ -484,10 +565,14 @@ def _line_body(
     if due is not None:
         parts.append(DUE_EMOJI + " " + due.isoformat())
     parts.append(ID_EMOJI + " " + task_id)
+    if note:
+        parts.append("[note:: " + note + "]")
     return " ".join(parts)
 
 
 def _apply_time(line: str, hours: float | None, days: list[date]) -> str:
+    note = NOTE_RE.search(line)
+    line = NOTE_STRIP_RE.sub("", line)
     line = HOURS_STRIP_RE.sub("", line)
     line = DAYS_STRIP_RE.sub("", line)
     suffix = ""
@@ -496,9 +581,36 @@ def _apply_time(line: str, hours: float | None, days: list[date]) -> str:
     if days:
         suffix += " [days:: " + ", ".join(item.isoformat() for item in days) + "]"
     if not suffix:
-        return line.rstrip()
-    cut = _meta_start(line)
-    return line[:cut].rstrip() + suffix + " " + line[cut:].lstrip() if cut < len(line) else line.rstrip() + suffix
+        result = line.rstrip()
+    else:
+        cut = _meta_start(line)
+        if cut < len(line):
+            result = line[:cut].rstrip() + suffix + " " + line[cut:].lstrip()
+        else:
+            result = line.rstrip() + suffix
+    if note:
+        result = result.rstrip() + " [note:: " + note.group(1).strip() + "]"
+    return result
+
+
+def _apply_entries(line: str, entries: list[tuple[date, float]]) -> str:
+    note = NOTE_RE.search(line)
+    line = NOTE_STRIP_RE.sub("", line)
+    line = TIME_STRIP_RE.sub("", line)
+    if not entries:
+        result = line.rstrip()
+    else:
+        suffix = " [time:: " + ", ".join(
+            "%s=%g" % (when.isoformat(), hours) for when, hours in entries
+        ) + "]"
+        cut = _meta_start(line)
+        if cut < len(line):
+            result = line[:cut].rstrip() + suffix + " " + line[cut:].lstrip()
+        else:
+            result = line.rstrip() + suffix
+    if note:
+        result = result.rstrip() + " [note:: " + note.group(1).strip() + "]"
+    return result
 
 
 def _meta_start(line: str) -> int:
@@ -543,6 +655,27 @@ def _notes_end(lines: list[str], index: int) -> int:
     while end < len(lines) and NOTES_RE.match(lines[end]):
         end += 1
     return end
+
+
+def _line_index(
+    lines: list[str],
+    task_id: str | None,
+    line_index: int | None,
+    expected_line: str | None,
+) -> int:
+    if task_id:
+        for cursor, line in enumerate(lines):
+            if not CHECK_RE.match(line):
+                continue
+            ident = ID_RE.search(line)
+            if ident and ident.group(1) == task_id:
+                return cursor
+        raise KeyError(task_id)
+    if line_index is None or line_index < 0 or line_index >= len(lines):
+        raise ValueError("conflict")
+    if expected_line is None or lines[line_index] != expected_line:
+        raise ValueError("conflict")
+    return line_index
 
 
 def _find_manual(lines: list[str], task_id: str) -> int:

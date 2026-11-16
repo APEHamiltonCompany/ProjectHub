@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ task.title }} - Project Hub{% endblock %}
+{% block page_title %}{{ task.title }}{% endblock %}
+{% block content %}
+
+<section class="panel hero">
+  <div class="hero-main">
+    <div class="hero-title">
+      <a class="btn small" href="{{ url_for('dashboard') }}">&larr; Dashboard</a>
+      <h2>{{ task.title }}</h2>
+      {% if task.kind == "manual" %}<span class="tag">manual</span>{% endif %}
+    </div>
+    <div class="small muted">
+      {{ task.category_label }}
+      {% if task.ref %}&middot; {{ task.ref }}{% endif %}
+      &middot; due {{ task.due or "none" }}
+      {{ macros.status_pill(task.status) }}
+    </div>
+    {% if task.notes %}<div class="small muted">{{ task.notes }}</div>{% endif %}
+  </div>
+  <div class="hero-actions">
+    <button type="button" class="btn" data-action="open" data-task-id="{{ task.id }}" data-target="folder">Open folder</button>
+    <button type="button" class="btn" data-action="open" data-task-id="{{ task.id }}" data-target="note">Open note in editor</button>
+  </div>
+</section>
+
+<div class="project-grid">
+  <div class="project-main">
+
+    <section class="panel">
+      <div class="panel-head"><h2>Task</h2><span class="small muted">{{ task.due or "no date" }}</span></div>
+      <ul class="task-list">
+        <li class="task-row" data-uid="{{ task.uid }}" data-mark="{{ task.mark }}" data-status="{{ task.status }}" data-task-id="{{ task.id }}">
+          {{ macros.tick(task) }}
+          <div class="task-body">
+            <div class="task-title">{{ task.title }}{% if task.recur %}<span class="tag tag-recur" title="{{ task.recur }}">&#128257; {{ task.recur_label }}</span>{% endif %}</div>
+            {{ macros.manual_actions(task) }}{{ macros.manual_edit(task) }}
+          </div>
+          <div class="task-launch">{% if launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="" data-task-id="{{ task.id }}" title="{{ launch }}">&#9654; {{ launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
+          <div class="task-meta">
+            <span class="nowrap">{{ task.due or "" }}{% if task.days is not none %}<span class="small muted"> ({{ task.days }}d)</span>{% endif %}</span>
+            {{ macros.status_pill(task.status) }}
+          </div>
+          {% if task.mark == " " %}
+          <div class="due-adjust">
+            <button type="button" class="btn small ghost" data-action="due-toggle">&#8943; adjust</button>
+            <div class="due-controls" hidden>
+              <div class="launch-controls">
+                <span class="small muted">Shortcut:</span>
+                <input type="text" class="launch-input" data-task-id="{{ task.id }}" value="{{ launch }}" placeholder="C:&#92;path&#92;to&#92;app.exe or https://..." aria-label="Launch shortcut">
+                <button type="button" class="btn small" data-action="launch-set" data-key="" data-task-id="{{ task.id }}">Set shortcut</button>
+                {% if launch %}<button type="button" class="btn small" data-action="launch-none" data-key="" data-task-id="{{ task.id }}">No shortcut</button>{% endif %}
+              </div>
+            </div>
+          </div>
+          {% endif %}
+        </li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Notes</h2>
+        <div class="tabs">
+          <button type="button" class="btn active" data-tab="rendered">Rendered</button>
+          {% if note.exists %}<button type="button" class="btn" data-tab="live">Live edit</button>{% endif %}
+          <button type="button" class="btn" data-tab="edit">Edit text</button>
+        </div>
+      </div>
+      <div class="tab-body" data-tab-body="rendered">
+        {% if note.exists %}
+        <div class="note-lines">
+          {% for row in note.lines %}
+            {% if row.kind == "check" %}
+            <div class="line check-line">{{ macros.tick_note(row, "", task.id) }}</div>
+            {% elif row.kind == "heading" %}
+            <div class="line heading">{{ row.html }}</div>
+            {% else %}
+            <div class="line">{{ row.html }}</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted">No note file found for this task.</p>
+        {% endif %}
+      </div>
+      <div class="tab-body" data-tab-body="live" hidden>
+        <p class="muted small">Click any line to edit it. Enter adds a line, Backspace at the start joins it to the line above, arrow keys move between lines, Esc stops editing.</p>
+        <div class="live-editor" id="live-editor"></div>
+      </div>
+      <div class="tab-body" data-tab-body="edit" hidden>
+        <div class="editor-split">
+          <textarea id="note-text" spellcheck="false">{{ note.text }}</textarea>
+          <div class="note-preview" id="note-preview"></div>
+        </div>
+      </div>
+      <div class="note-savebar" id="note-savebar" hidden>
+        <div id="note-conflict" class="warn-box" hidden>
+          The note changed on disk since this page loaded.
+          <button type="button" class="btn small" id="note-reload">Reload (discard my edits)</button>
+          <button type="button" class="btn small danger" id="note-force">Overwrite anyway</button>
+        </div>
+        <div class="editor-foot">
+          <span id="note-dirty" class="hint" hidden>Unsaved changes</span>
+          <button type="button" class="btn primary" id="note-save" data-task-id="{{ task.id }}" data-hash="{{ note.hash }}">Save</button>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <aside class="project-side">
+
+    <section class="panel">
+      <div class="panel-head"><h2>Links</h2><span class="small muted">{{ links|length }}</span></div>
+      <ul class="link-list">
+        {% for link in links %}
+        <li>
+          <span class="link-icon link-icon-other">LINK</span>
+          {% if link.http %}
+          <a class="link-item" href="{{ link.url }}" target="_blank" rel="noopener" title="{{ link.url }}">{{ link.title }}</a>
+          {% else %}
+          <a class="link-item" href="#" data-action="open" data-task-id="{{ task.id }}" data-target="link" data-index="{{ loop.index0 }}" title="{{ link.url }}">{{ link.title }}</a>
+          {% endif %}
+          <button type="button" class="btn small ghost danger" data-action="task-link-remove" data-task-id="{{ task.id }}" data-index="{{ loop.index0 }}">Remove</button>
+        </li>
+        {% else %}
+        <li class="muted small">No links yet.</li>
+        {% endfor %}
+      </ul>
+      <div class="link-form">
+        <input type="text" class="link-title" data-task-id="{{ task.id }}" placeholder="Title" aria-label="Link title">
+        <input type="text" class="link-url" data-task-id="{{ task.id }}" placeholder="https://... or C:&#92;path" aria-label="Link url">
+        <button type="button" class="btn" data-action="task-link-add" data-task-id="{{ task.id }}">Add link</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Folder</h2><span class="small muted">{{ files|length }}</span></div>
+      <p class="small muted">{{ folder }}</p>
+      <button type="button" class="btn small" data-action="open" data-task-id="{{ task.id }}" data-target="folder">Open folder</button>
+      {% if files %}
+      <ul class="file-list">
+        {% for file in files %}
+        <li><span class="file-name">{{ file.name }}</span><span class="small muted nowrap">{{ file.modified }}</span></li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted">none</p>{% endif %}
+      <div class="link-form">
+        <input type="text" class="folder-input" data-task-id="{{ task.id }}" placeholder="Change folder..." aria-label="Folder">
+        <button type="button" class="btn" data-action="task-folder-set" data-task-id="{{ task.id }}">Set</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Time</h2><span class="small muted">{{ task.tracked_label or "0" }}h</span></div>
+      {% if task.time_entries %}
+      <ul class="file-list">
+        {% for entry in task.time_entries %}
+        <li>
+          <span class="file-name">{{ entry.day }}</span>
+          <span class="small muted nowrap">{{ entry.hours }}h</span>
+          <button type="button" class="btn small ghost danger" data-action="time-remove" data-key="" data-task-id="{{ task.id }}" data-index="{{ loop.index0 }}" aria-label="Remove entry">&times;</button>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted">none</p>{% endif %}
+    </section>
+
+  </aside>
+</div>
+
+{% endblock %}

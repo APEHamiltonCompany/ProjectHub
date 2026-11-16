@@ -67,6 +67,7 @@
               {% if task.override_note %}<div class="small muted">{{ task.override_note }}</div>{% endif %}
               {% if task.kind == "manual" %}{{ macros.manual_actions(task) }}{{ macros.manual_edit(task) }}{% endif %}
             </div>
+            <div class="task-launch">{% if task.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="{{ project.key }}" data-task-id="{{ task.id }}" title="{{ task.launch }}">&#9654; {{ task.launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
             <div class="task-meta">
               <span class="nowrap">{{ task.due or "" }}{% if task.override_due %}<span class="small muted"> (override)</span>{% elif task.computed_due %}<span class="small muted"> (computed)</span>{% endif %}</span>
               {{ macros.status_pill(task.status) }}
@@ -79,6 +80,13 @@
                 <input type="text" class="due-note" data-task-id="{{ task.id }}" value="{{ task.override_note }}" placeholder="blocked: ..." aria-label="Override note">
                 <button type="button" class="btn small" data-action="due-set" data-task-id="{{ task.id }}">Set</button>
                 <button type="button" class="btn small" data-action="due-clear" data-task-id="{{ task.id }}">Clear</button>
+                <div class="launch-controls">
+                  <span class="small muted">Shortcut:</span>
+                  <input type="text" class="launch-input" data-task-id="{{ task.id }}" value="{{ task.launch if task.launch_source == 'project' else '' }}" placeholder="{{ task.launch or 'C:&#92;path&#92;to&#92;app.exe or https://…' }}" aria-label="Launch shortcut">
+                  <button type="button" class="btn small" data-action="launch-set" data-key="{{ project.key }}" data-task-id="{{ task.id }}">Set shortcut</button>
+                  {% if task.launch_source == "project" %}<button type="button" class="btn small" data-action="launch-reset" data-key="{{ project.key }}" data-task-id="{{ task.id }}">Use template</button>{% endif %}
+                  {% if task.launch %}<button type="button" class="btn small" data-action="launch-none" data-key="{{ project.key }}" data-task-id="{{ task.id }}">No shortcut</button>{% endif %}
+                </div>
               </div>
             </div>
             {% endif %}

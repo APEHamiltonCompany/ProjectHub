@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import webbrowser
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,16 +26,20 @@ from tracker import settings as settings_mod
 from tracker import state as state_mod
 from tracker.hub import tasks as tasks_mod
 from tracker.hub import timesheet as timesheet_mod
+from tracker.hub import winfocus
 from tracker.sources import outlook_com
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 CHECKBOX_RE = re.compile(r"^(\s*[-*]\s+\[)([ xX-])(\]\s.*)$")
+NOTE_BAD_RE = re.compile(r'[<>:"/\\|?*]')
 BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 URL_RE = re.compile(r"https?://[^\s<>\"')]+")
 ID_RE = re.compile(notes.ID_EMOJI + r"\s*([A-Za-z0-9_-]+)")
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
+CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 CLASSIFY_CHOICES = [
     ("kickoff", "Kickoff"),
     ("design_review", "Design review"),
@@ -115,8 +120,36 @@ def _iso(value) -> date | None:
         return None
 
 
+def _time_payload(row: dict) -> dict:
+    entries = [
+        {"day": when.isoformat(), "hours": hours} for when, hours in row.get("time") or []
+    ]
+    return {
+        "ok": True,
+        "line": row.get("line") or "",
+        "time": entries,
+        "tracked": round(sum(item["hours"] for item in entries), 2),
+    }
+
+
 def _is_http(url: str) -> bool:
     return urlparse(str(url or "")).scheme in ("http", "https")
+
+
+def _launch_keys(task_id: str) -> tuple[str, ...]:
+    if task_id.startswith("p") and "-" in task_id:
+        return (task_id, task_id.split("-", 1)[1])
+    return (task_id,)
+
+
+def _launch_label(target: str) -> str:
+    text = str(target or "")
+    if not text:
+        return ""
+    if _is_http(text):
+        return urlparse(text).netloc or text
+    path = Path(text)
+    return path.stem if path.suffix else path.name
 
 
 def _inline(text: str) -> str:
@@ -169,6 +202,25 @@ def email_opener(kind: str, target: str) -> None:
     os.startfile(target)
 
 
+def launcher(target: str) -> None:
+    text = str(target or "")
+    if _is_http(text):
+        webbrowser.open(text)
+        return
+    path = Path(text)
+    before = winfocus.top_windows()
+    if path.suffix.lower() in (".exe", ".bat", ".cmd"):
+        proc = subprocess.Popen(
+            [text],
+            cwd=str(path.parent),
+            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        )
+        winfocus.raise_after_launch(before, proc.pid)
+        return
+    os.startfile(text)
+    winfocus.raise_after_launch(before)
+
+
 def create_app(
     config_path: str | Path,
     port: int | None = None,
@@ -217,6 +269,11 @@ def create_app(
     if lifecycle and "Completion" not in lifecycle:
         lifecycle.append("Completion")
     trigger_ids = {trigger.get("id") for trigger in rules.get("triggers") or []}
+    template_launch = {
+        str(step["id"]): str(step.get("launch") or "")
+        for step in rules.get("workflow") or []
+        if step.get("id")
+    }
     classify_choices = [(tid, label) for tid, label in CLASSIFY_CHOICES if tid == "ignore" or tid in trigger_ids]
 
     allowed_hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
@@ -230,6 +287,7 @@ def create_app(
     app.config["HUB_TOKEN"] = token
     app.config["HUB_PORT"] = port
     app.config["EMAIL_OPENER"] = email_opener
+    app.config["LAUNCHER"] = launcher
     app.jinja_env.globals["categories"] = tasks_mod.CATEGORIES
     app.jinja_env.globals["weekdays"] = tasks_mod.WEEKDAYS
 
@@ -259,6 +317,161 @@ def create_app(
             if project.get("key") == key:
                 return project
         return None
+
+    def task_note_root() -> Path:
+        vault = live.get("vault")
+        if vault:
+            return Path(vault)
+        return Path(live["personal_path"]).parent
+
+    def task_note_rel(path: Path) -> str:
+        try:
+            return path.relative_to(task_note_root()).as_posix()
+        except ValueError:
+            return path.as_posix()
+
+    def task_note_slug(title: str) -> str:
+        text = NOTE_BAD_RE.sub(" ", str(title or ""))
+        text = re.sub(r"\s+", " ", text).strip().strip(".")
+        return text[:80].strip() or "Task"
+
+    def task_note_target(task_id: str, title: str) -> Path:
+        base = task_note_root() / "My Tasks"
+        slug = task_note_slug(title)
+        folder = base / slug
+        if notes.lp(folder).is_dir():
+            existing = folder / (slug + ".md")
+            if notes.lp(existing).is_file():
+                data, _raw, _body = notes.split_frontmatter(notes.read_text(existing)[0])
+                if str(data.get("task_id") or "") not in ("", task_id):
+                    folder = base / ("%s (%s)" % (slug, task_id))
+        return folder / (folder.name + ".md")
+
+    def personal_task_row(task_id: str) -> dict | None:
+        path = live["personal_path"]
+        if not notes.lp(path).is_file():
+            return None
+        text, _nl, _bom, _enc = notes.read_text(path)
+        for row in tasks_mod.parse_lines(text):
+            if row["id"] == task_id:
+                return row
+        return None
+
+    def task_note_path(task_id: str) -> Path | None:
+        row = personal_task_row(task_id)
+        if row is None:
+            return None
+        rel = row.get("note") or ""
+        if not rel:
+            return None
+        path = Path(rel)
+        if not path.is_absolute():
+            path = task_note_root() / path
+        return path if notes.lp(path).is_file() else None
+
+    def task_note_frontmatter(task_id: str) -> dict:
+        path = task_note_path(task_id)
+        if path is None:
+            return {}
+        data, _raw, _body = notes.split_frontmatter(notes.read_text(path)[0])
+        return data
+
+    def ensure_task_note(task_id: str, title: str) -> Path:
+        path = task_note_path(task_id)
+        if path is not None:
+            return path
+        path = task_note_target(task_id, title)
+        if not notes.lp(path).is_file():
+            notes.lp(path).parent.mkdir(parents=True, exist_ok=True)
+            data = {"task_id": task_id, "folder": "", "launch": "", "links": []}
+            notes.write_text(path, notes.dump_frontmatter(data) + "## Notes\n", "\n", False, "utf-8")
+        rel = task_note_rel(path)
+        source = live["personal_path"]
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(source)
+                try:
+                    new_text = tasks_mod.update_manual(text, task_id, note=rel)
+                except KeyError:
+                    return path
+                if new_text != text:
+                    notes.write_text(source, new_text, newline, bom, encoding)
+        return path
+
+    def task_note_for(task_id: str) -> Path | None:
+        row = personal_task_row(task_id)
+        if row is None:
+            return None
+        return ensure_task_note(task_id, row.get("title") or task_id)
+
+    def task_note_links(data: dict) -> list[dict]:
+        rows = []
+        for link in data.get("links") or []:
+            if isinstance(link, dict):
+                url = str(link.get("url") or "").strip()
+                title = str(link.get("title") or "").strip() or url
+            else:
+                url = str(link or "").strip()
+                title = url
+            if url:
+                rows.append({"title": title, "url": url, "http": _is_http(url)})
+        return rows
+
+    def task_note_folder(data: dict, path: Path) -> Path:
+        raw = str(data.get("folder") or "").strip()
+        if raw:
+            folder = Path(raw)
+            if not folder.is_absolute():
+                folder = task_note_root() / folder
+            if notes.lp(folder).is_dir():
+                return folder
+        return path.parent
+
+    def folder_files(folder: str | Path) -> list[dict]:
+        rows = []
+        if not str(folder or ""):
+            return rows
+        try:
+            for entry in sorted(notes.lp(folder).iterdir(), key=lambda p: p.name.lower()):
+                if entry.name.startswith("~$") or not notes.lp(entry).is_file():
+                    continue
+                rows.append(
+                    {
+                        "name": entry.name,
+                        "modified": datetime.fromtimestamp(notes.lp(entry).stat().st_mtime).strftime(
+                            "%Y-%m-%d %H:%M"
+                        ),
+                    }
+                )
+        except OSError:
+            pass
+        return rows
+
+    def launch_target(key: str, task_id: str, frontmatter: dict | None = None) -> str:
+        if not task_id:
+            return ""
+        if not key and task_id.startswith(tasks_mod.MANUAL_PREFIX):
+            if frontmatter is None:
+                frontmatter = task_note_frontmatter(task_id)
+            return str((frontmatter or {}).get("launch") or "")
+        if frontmatter is None:
+            frontmatter = {}
+            project = project_by_key(key) if key else None
+            path = (project or {}).get("note_path") or ""
+            if path and notes.lp(path).is_file():
+                text, _nl, _bom, _enc = notes.read_text(path)
+                data, _raw, _body = notes.split_frontmatter(text)
+                frontmatter = data if isinstance(data, dict) else {}
+        overrides = frontmatter.get("task_launch") if isinstance(frontmatter, dict) else None
+        keys = _launch_keys(task_id)
+        if isinstance(overrides, dict):
+            for candidate in keys:
+                if candidate in overrides:
+                    return str(overrides.get(candidate) or "")
+        for candidate in keys:
+            if template_launch.get(candidate):
+                return template_launch[candidate]
+        return ""
 
     def mutate_state(fn):
         with mutex:
@@ -477,7 +690,7 @@ def create_app(
                     continue
                 if entry.name.strip().lower() in excluded:
                     continue
-                if entry.name.strip().lower() == matcher.ARCHIVE_DIR.lower():
+                if matcher.is_reserved_dir(entry.name):
                     continue
                 names.append(entry.name)
         except OSError:
@@ -496,7 +709,7 @@ def create_app(
                 continue
             if entry.name.strip().lower() in excluded:
                 continue
-            if entry.name.strip().lower() == matcher.ARCHIVE_DIR.lower():
+            if matcher.is_reserved_dir(entry.name):
                 continue
             rows.append(entry)
         return rows
@@ -575,6 +788,8 @@ def create_app(
             mark = row.get("mark") or " "
             override = overrides.get(row.get("id") or "") or {}
             override_due = _iso(override.get("due"))
+            entries = row.get("time") or []
+            tracked = round(sum(hours for _when, hours in entries), 2)
             row.update(
                 {
                     "uid": "%s:%s" % (row["key"], row.get("id") or "L%d" % (row.get("line_index") or 0)),
@@ -589,10 +804,25 @@ def create_app(
                     "hours": row.get("hours"),
                     "hours_label": ("%g" % row["hours"]) if row.get("hours") else "",
                     "worked_days": [item.isoformat() for item in row.get("worked_days") or []],
+                    "time_entries": [
+                        {"day": when.isoformat(), "hours": hours} for when, hours in entries
+                    ],
+                    "tracked": tracked,
+                    "tracked_label": ("%g" % tracked) if tracked else "",
                     "ref": row.get("ref") or "",
                 }
             )
             return row
+
+        def launch_fields(key: str, task_id: str, overrides: dict) -> dict:
+            target = launch_target(key, task_id, {"task_launch": overrides})
+            if task_id and any(candidate in overrides for candidate in _launch_keys(task_id)):
+                source = "project"
+            elif target:
+                source = "template"
+            else:
+                source = ""
+            return {"launch": target, "launch_label": _launch_label(target), "launch_source": source}
 
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
@@ -601,10 +831,14 @@ def create_app(
             ident = " / ".join(list(project.get("so") or []) + list(project.get("qte") or []))
             project_stage = project.get("stage") or ""
             parsed: list[dict] = []
+            launch_overrides: dict = {}
             path = project.get("note_path") or ""
             if path and notes.lp(path).is_file():
                 text, _nl, _bom, _enc = notes.read_text(path)
                 parsed = tasks_mod.parse_lines(text)
+                data, _raw, _body = notes.split_frontmatter(text)
+                if isinstance(data.get("task_launch"), dict):
+                    launch_overrides = data["task_launch"]
             by_id: dict[str, dict] = {}
             for row in parsed:
                 if row["id"]:
@@ -639,7 +873,9 @@ def create_app(
                             "mark": entry["mark"] if entry else str(task.get("mark") or " ").lower(),
                             "hours": entry["hours"] if entry else None,
                             "worked_days": entry["days"] if entry else [],
+                            "time": entry["time"] if entry else [],
                             "ref": entry["ref"] if entry else "",
+                            **launch_fields(key, task_id, launch_overrides),
                         }
                     )
                 )
@@ -678,7 +914,9 @@ def create_app(
                             "mark": row["mark"],
                             "hours": row["hours"],
                             "worked_days": row["days"],
+                            "time": row["time"],
                             "ref": row["ref"],
+                            **launch_fields(key, row["id"], launch_overrides),
                         }
                     )
                 )
@@ -693,6 +931,14 @@ def create_app(
                     continue
                 category = row["category"] or "personal"
                 label = tasks_mod.CATEGORY_LABELS.get(category, tasks_mod.CATEGORY_LABELS["personal"])
+                launch = ""
+                if row["note"]:
+                    note_path = Path(row["note"])
+                    if not note_path.is_absolute():
+                        note_path = task_note_root() / note_path
+                    if notes.lp(note_path).is_file():
+                        note_data, _nraw, _nbody = notes.split_frontmatter(notes.read_text(note_path)[0])
+                        launch = str(note_data.get("launch") or "")
                 items.append(
                     finish(
                         {
@@ -719,8 +965,12 @@ def create_app(
                             "mark": row["mark"],
                             "hours": row["hours"],
                             "worked_days": row["days"],
+                            "time": row["time"],
                             "ref": row["ref"],
                             "ref_suggested": tasks_mod.suggest_ref(row["title"], row["notes"]),
+                            "launch": launch,
+                            "launch_label": _launch_label(launch),
+                            "launch_source": "task" if launch else "",
                         }
                     )
                 )
@@ -1002,23 +1252,7 @@ def create_app(
         tasks = [item for item in live_tasks(today) if item["key"] == key]
         ship = _iso(project.get("ship_date"))
         design = _iso(project.get("design_need_by"))
-        files = []
-        folder = project.get("folder") or ""
-        if folder:
-            try:
-                for entry in sorted(notes.lp(folder).iterdir(), key=lambda p: p.name.lower()):
-                    if entry.name.startswith("~$") or not notes.lp(entry).is_file():
-                        continue
-                    files.append(
-                        {
-                            "name": entry.name,
-                            "modified": datetime.fromtimestamp(notes.lp(entry).stat().st_mtime).strftime(
-                                "%Y-%m-%d %H:%M"
-                            ),
-                        }
-                    )
-            except OSError:
-                pass
+        files = folder_files(project.get("folder") or "")
         emails = []
         for email in project.get("emails") or []:
             item = dict(email)
@@ -1058,6 +1292,33 @@ def create_app(
             tasks=tasks,
             stages=lifecycle or stages,
             gantt=gantt,
+            layout=current_layout(),
+        )
+
+    @app.get("/t/<task_id>")
+    def task_page(task_id: str):
+        if not task_id.startswith(tasks_mod.MANUAL_PREFIX):
+            abort(404)
+        today = date.today()
+        item = next(
+            (row for row in live_tasks(today) if row["key"] == "" and row["id"] == task_id),
+            None,
+        )
+        if item is None:
+            abort(404)
+        path = ensure_task_note(task_id, item["title"])
+        data, _raw, _body = notes.split_frontmatter(notes.read_text(path)[0])
+        folder = task_note_folder(data, path)
+        launch = str(data.get("launch") or "")
+        return render_template(
+            "task.html",
+            task=item,
+            note=note_view({"note_path": str(path)}),
+            links=task_note_links(data),
+            folder=str(folder),
+            files=folder_files(folder),
+            launch=launch,
+            launch_label=_launch_label(launch),
             layout=current_layout(),
         )
 
@@ -1708,9 +1969,111 @@ def create_app(
         links = mutate_state(apply)
         return jsonify({"key": key, "links": links})
 
+    @app.post("/api/task/links/add")
+    def api_task_links_add():
+        payload = request.get_json(silent=True) or {}
+        task_id = str(payload.get("task_id") or "")
+        path = task_note_for(task_id)
+        if path is None:
+            return jsonify({"error": "unknown task"}), 404
+        url = str(payload.get("url") or "").strip().strip('"').strip("'").strip()
+        title = str(payload.get("title") or "").strip() or url
+        if not url:
+            return jsonify({"error": "url required"}), 400
+        if not _is_http(url) and not notes.lp(url).exists():
+            return jsonify({"error": "url must be an http(s) link or an existing path"}), 400
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                data, _raw, body = notes.split_frontmatter(text)
+                links = [link for link in data.get("links") or [] if isinstance(link, dict)]
+                if not any(str(link.get("url") or "") == url for link in links):
+                    links.append({"title": title, "url": url})
+                data["links"] = links
+                notes.write_text(path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
+        return jsonify({"task_id": task_id, "links": task_note_links(data)})
+
+    @app.post("/api/task/links/remove")
+    def api_task_links_remove():
+        payload = request.get_json(silent=True) or {}
+        task_id = str(payload.get("task_id") or "")
+        path = task_note_for(task_id)
+        if path is None:
+            return jsonify({"error": "unknown task"}), 404
+        try:
+            index = int(payload.get("index"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "bad index"}), 400
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                data, _raw, body = notes.split_frontmatter(text)
+                links = [link for link in data.get("links") or [] if isinstance(link, dict)]
+                if index < 0 or index >= len(links):
+                    return jsonify({"error": "bad index"}), 400
+                del links[index]
+                data["links"] = links
+                notes.write_text(path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
+        return jsonify({"task_id": task_id, "links": task_note_links(data)})
+
+    @app.post("/api/task/folder")
+    def api_task_folder():
+        payload = request.get_json(silent=True) or {}
+        task_id = str(payload.get("task_id") or "")
+        path = task_note_for(task_id)
+        if path is None:
+            return jsonify({"error": "unknown task"}), 404
+        raw = str(payload.get("folder") or "").strip().strip('"').strip("'").strip()
+        folder = ""
+        if raw:
+            candidate = Path(raw)
+            if not candidate.is_absolute():
+                candidate = task_note_root() / candidate
+            if not notes.lp(candidate).is_dir():
+                return jsonify({"error": "folder must be an existing directory"}), 400
+            folder = str(candidate)
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                data, _raw, body = notes.split_frontmatter(text)
+                data["folder"] = folder
+                notes.write_text(path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
+        return jsonify({"task_id": task_id, "folder": folder or str(path.parent)})
+
     @app.post("/api/open")
     def api_open():
         payload = request.get_json(silent=True) or {}
+        task_id = str(payload.get("task_id") or "")
+        if task_id:
+            path = task_note_for(task_id)
+            if path is None:
+                return jsonify({"error": "unknown task"}), 404
+            data, _raw, _body = notes.split_frontmatter(notes.read_text(path)[0])
+            what = str(payload.get("target") or "")
+            if what == "folder":
+                target = str(task_note_folder(data, path))
+            elif what == "note":
+                target = str(path)
+            elif what == "link":
+                links = task_note_links(data)
+                try:
+                    index = int(payload.get("index", payload.get("link_index")))
+                except (TypeError, ValueError):
+                    return jsonify({"error": "bad index"}), 400
+                if index < 0 or index >= len(links):
+                    return jsonify({"error": "bad index"}), 400
+                if links[index]["http"]:
+                    return jsonify({"error": "http links open in the browser"}), 400
+                target = links[index]["url"]
+            else:
+                target = ""
+            if not target:
+                return jsonify({"error": "nothing to open"}), 404
+            try:
+                os.startfile(target)
+            except OSError as exc:
+                return jsonify({"error": str(exc)}), 500
+            return jsonify({"opened": target})
         project = project_by_key(str(payload.get("key") or ""))
         if project is None:
             return jsonify({"error": "unknown project"}), 404
@@ -1884,12 +2247,20 @@ def create_app(
     def api_note_toggle():
         payload = request.get_json(silent=True) or {}
         key = str(payload.get("key") or "")
-        project = project_by_key(key)
-        if project is None:
-            return jsonify({"error": "unknown project"}), 404
-        path = project.get("note_path") or ""
-        if not path or not notes.lp(path).is_file():
-            return jsonify({"error": "note missing"}), 404
+        task_id = str(payload.get("task_id") or "")
+        if task_id:
+            note_path = task_note_for(task_id)
+            if note_path is None:
+                return jsonify({"error": "note missing"}), 404
+            path = str(note_path)
+            key = ""
+        else:
+            project = project_by_key(key)
+            if project is None:
+                return jsonify({"error": "unknown project"}), 404
+            path = project.get("note_path") or ""
+            if not path or not notes.lp(path).is_file():
+                return jsonify({"error": "note missing"}), 404
         try:
             line_index = int(payload.get("line_index"))
         except (TypeError, ValueError):
@@ -1917,7 +2288,7 @@ def create_app(
                     {
                         "at": datetime.now().astimezone().isoformat(timespec="seconds"),
                         "key": key,
-                        "task_id": ident.group(1) if ident else "",
+                        "task_id": ident.group(1) if ident else task_id,
                         "title": _task_title(new_line),
                         "mark": mark,
                     }
@@ -1929,12 +2300,19 @@ def create_app(
     def api_note_save():
         payload = request.get_json(silent=True) or {}
         key = str(payload.get("key") or "")
-        project = project_by_key(key)
-        if project is None:
-            return jsonify({"error": "unknown project"}), 404
-        path = project.get("note_path") or ""
-        if not path or not notes.lp(path).is_file():
-            return jsonify({"error": "note missing"}), 404
+        task_id = str(payload.get("task_id") or "")
+        if task_id:
+            note_path = task_note_for(task_id)
+            if note_path is None:
+                return jsonify({"error": "note missing"}), 404
+            path = str(note_path)
+        else:
+            project = project_by_key(key)
+            if project is None:
+                return jsonify({"error": "unknown project"}), 404
+            path = project.get("note_path") or ""
+            if not path or not notes.lp(path).is_file():
+                return jsonify({"error": "note missing"}), 404
         text = payload.get("text")
         if not isinstance(text, str):
             return jsonify({"error": "text required"}), 400
@@ -2271,6 +2649,164 @@ def create_app(
                 "days": [item.isoformat() for item in row["days"]],
             }
         )
+
+    @app.post("/api/task/time/add")
+    def api_task_time_add():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        task_id = str(payload.get("id") or "")
+        line_index = None
+        if not task_id:
+            try:
+                line_index = int(payload.get("line_index"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "bad line_index"}), 400
+        try:
+            hours = float(payload.get("hours"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "bad hours"}), 400
+        if not 0 < hours <= 24:
+            return jsonify({"error": "bad hours"}), 400
+        today = date.today()
+        day_raw = payload.get("day")
+        if day_raw in (None, ""):
+            day = today
+        else:
+            try:
+                day = date.fromisoformat(str(day_raw).strip())
+            except ValueError:
+                return jsonify({"error": "bad day"}), 400
+            if day < today - timedelta(days=31) or day > today + timedelta(days=1):
+                return jsonify({"error": "bad day"}), 400
+        path = task_path(key)
+        if path is None:
+            return jsonify({"error": "note missing"}), 404
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                try:
+                    new_text, row = tasks_mod.add_time_entry(
+                        text,
+                        task_id=task_id or None,
+                        line_index=line_index,
+                        expected_line=payload.get("expected_line"),
+                        day=day,
+                        hours=hours,
+                    )
+                except (KeyError, ValueError):
+                    return jsonify({"error": "conflict"}), 409
+                notes.write_text(path, new_text, newline, bom, encoding)
+        return jsonify(_time_payload(row))
+
+    @app.post("/api/task/time/remove")
+    def api_task_time_remove():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        task_id = str(payload.get("id") or "")
+        line_index = None
+        if not task_id:
+            try:
+                line_index = int(payload.get("line_index"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "bad line_index"}), 400
+        try:
+            entry_index = int(payload.get("entry_index"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "bad entry_index"}), 400
+        path = task_path(key)
+        if path is None:
+            return jsonify({"error": "note missing"}), 404
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                try:
+                    new_text, row = tasks_mod.remove_time_entry(
+                        text,
+                        task_id=task_id or None,
+                        line_index=line_index,
+                        expected_line=payload.get("expected_line"),
+                        entry_index=entry_index,
+                    )
+                except (KeyError, ValueError):
+                    return jsonify({"error": "conflict"}), 409
+                notes.write_text(path, new_text, newline, bom, encoding)
+        return jsonify(_time_payload(row))
+
+    @app.post("/api/task/launch")
+    def api_task_launch():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        task_id = str(payload.get("task_id") or "")
+        target = launch_target(key, task_id)
+        if not target:
+            return jsonify({"error": "no shortcut for this task"}), 404
+        if not _is_http(target) and not notes.lp(target).exists():
+            return jsonify({"error": "not found: %s" % target}), 404
+        opener = app.config.get("LAUNCHER") or launcher
+        try:
+            opener(target)
+        except OSError as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({"launched": target})
+
+    @app.post("/api/task/launch_set")
+    def api_task_launch_set():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        task_id = str(payload.get("task_id") or "")
+        if not task_id:
+            return jsonify({"error": "task_id required"}), 400
+        reset = bool(payload.get("reset"))
+        target = str(payload.get("target") or "").strip().strip('"').strip("'").strip()
+        if not reset and target and not _is_http(target) and not notes.lp(target).exists():
+            return jsonify({"error": "target must be an existing file/folder or an http(s) link"}), 400
+        if not key and task_id.startswith(tasks_mod.MANUAL_PREFIX):
+            row = personal_task_row(task_id) or {}
+            note_path = ensure_task_note(task_id, row.get("title") or task_id)
+            with mutex:
+                with locking.file_lock(lock_file):
+                    text, newline, bom, encoding = notes.read_text(note_path)
+                    data, _raw, body = notes.split_frontmatter(text)
+                    if reset or not target:
+                        data.pop("launch", None)
+                    else:
+                        data["launch"] = target
+                    notes.write_text(note_path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
+            resolved = "" if reset or not target else target
+            return jsonify({"task_id": task_id, "launch": resolved, "source": "task" if resolved else ""})
+        project = project_by_key(key)
+        if project is None:
+            return jsonify({"error": "unknown project"}), 404
+        path = project.get("note_path") or ""
+        if not path or not notes.lp(path).is_file():
+            return jsonify({"error": "note missing"}), 404
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                data, _raw, body = notes.split_frontmatter(text)
+                overrides = data.get("task_launch")
+                if not isinstance(overrides, dict):
+                    overrides = {}
+                if reset:
+                    for candidate in _launch_keys(task_id):
+                        overrides.pop(candidate, None)
+                else:
+                    overrides[task_id] = target
+                if overrides:
+                    data["task_launch"] = overrides
+                else:
+                    data.pop("task_launch", None)
+                if data:
+                    new_text = notes.dump_frontmatter(data) + body
+                else:
+                    new_text = body
+                notes.write_text(path, new_text, newline, bom, encoding)
+        text, _nl, _bom, _enc = notes.read_text(path)
+        data, _raw, _body = notes.split_frontmatter(text)
+        overrides = data.get("task_launch") if isinstance(data.get("task_launch"), dict) else {}
+        resolved = launch_target(key, task_id, data)
+        source = "project" if any(c in overrides for c in _launch_keys(task_id)) else "template" if resolved else ""
+        return jsonify({"task_id": task_id, "launch": resolved, "source": source})
 
     @app.post("/api/ui")
     def api_ui():

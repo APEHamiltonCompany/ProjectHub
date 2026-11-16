@@ -108,6 +108,59 @@ def build(
         )
         return row_for(project_id or "key:" + key, project_id, label, key, "", not project_id)
 
+    def item_row(item: dict) -> dict:
+        key = str(item.get("key") or "")
+        ref = str(item.get("ref") or "")
+        if key:
+            project = by_key.get(key)
+            return project_row(project) if project else row_for("key:" + key, "", key, key, "", True)
+        if ref:
+            entry = index.get(ref) or {}
+            project_id = str(entry.get("project_id") or "")
+            label = _label(str(entry.get("customer") or ""), str(entry.get("so") or ""), project_id or ref)
+            return row_for(project_id or "ref:" + ref, project_id, label, "", ref, not project_id)
+        return row_for(NONE_ROW, "", NONE_LABEL, "", "", False)
+
+    for item in items or []:
+        entries = item.get("time_entries") or []
+        if not entries:
+            continue
+        row = None
+        tracked_days = []
+        tracked_total = 0.0
+        for tracked in entries:
+            day = _day(tracked.get("day"))
+            if day is None or day.isoformat() not in day_set:
+                continue
+            try:
+                hours = float(tracked.get("hours") or 0)
+            except (TypeError, ValueError):
+                continue
+            if hours <= 0:
+                continue
+            if row is None:
+                row = item_row(item)
+            entry = cell(row, day.isoformat())
+            entry["auto"] += hours
+            entry["sources"].append(
+                "task: %s (%sh, %s)"
+                % (
+                    item.get("title") or "",
+                    _hours_text(hours),
+                    "done" if item.get("mark") == "x" else "open",
+                )
+            )
+            tracked_days.append(day.isoformat())
+            tracked_total += hours
+        if row is not None:
+            row["tasks"].append(
+                {
+                    "title": item.get("title") or "",
+                    "hours": round(tracked_total, 2),
+                    "days": tracked_days,
+                }
+            )
+
     for item in items or []:
         if item.get("mark") != "x":
             continue
@@ -118,18 +171,7 @@ def build(
         in_range = [value for value in all_days if value in day_set]
         if not all_days or not in_range:
             continue
-        key = str(item.get("key") or "")
-        ref = str(item.get("ref") or "")
-        if key:
-            project = by_key.get(key)
-            row = project_row(project) if project else row_for("key:" + key, "", key, key, "", True)
-        elif ref:
-            entry = index.get(ref) or {}
-            project_id = str(entry.get("project_id") or "")
-            label = _label(str(entry.get("customer") or ""), str(entry.get("so") or ""), project_id or ref)
-            row = row_for(project_id or "ref:" + ref, project_id, label, "", ref, not project_id)
-        else:
-            row = row_for(NONE_ROW, "", NONE_LABEL, "", "", False)
+        row = item_row(item)
         share = float(hours) / len(all_days)
         source = "task: %s (%sh)" % (item.get("title") or "", _hours_text(hours))
         for day_iso in in_range:

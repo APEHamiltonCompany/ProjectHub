@@ -22,6 +22,7 @@ ID_EMOJI = "\U0001F194"
 ID_RE = re.compile(ID_EMOJI + r"\s*([A-Za-z0-9_-]+)")
 DUE_RE = re.compile(DUE_EMOJI + r"\s*(\d{4}-\d{2}-\d{2})")
 DONE_RE = re.compile(DONE_EMOJI + r"\s*(\d{4}-\d{2}-\d{2})")
+TIME_RE = re.compile(r"\[time::\s*[^\]]*\]")
 MARK_RE = re.compile(r"^\s*[-*]\s*\[(.)\]")
 CHECK_RE = re.compile(r"^\s*[-*]\s*\[([ xX-])\]\s*(.*)$")
 TODO_HEADER_RE = re.compile(r"^\s*\*\*TO DO:\*\*", re.I)
@@ -196,6 +197,9 @@ def format_task_line(task: Task, entry: Optional[dict], today: date) -> str:
         return entry["line"]
     title = task.title + (" (%s)" % task.note if task.note else "")
     parts = ["-", "[ ]", title]
+    token = TIME_RE.search(entry["line"]) if entry else None
+    if token:
+        parts.append(token.group(0))
     if task.due:
         parts.append(DUE_EMOJI + " " + task.due.isoformat())
     parts.append(ID_EMOJI + " " + task.id)

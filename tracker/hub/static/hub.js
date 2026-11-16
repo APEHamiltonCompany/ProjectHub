@@ -189,6 +189,8 @@
       url = "/api/note/toggle";
       body.line_index = parseInt(wrapper.getAttribute("data-index"), 10);
       body.expected_line = wrapper.getAttribute("data-line");
+      var noteTask = wrapper.getAttribute("data-note-task");
+      if (noteTask) { body.task_id = noteTask; }
     } else if (id) {
       body.id = id;
     } else {
@@ -207,13 +209,20 @@
         reload = function () { window.location.reload(); };
       }
       if (data.mark === "x") {
+        var tickedRow = wrapper.closest(".task-row") || wrapper.closest("tr");
+        var trackedChip = tickedRow ? tickedRow.querySelector('[data-action="time-entries"]') : null;
         openTimePop(wrapper, {
           key: body.key,
           id: body.id || "",
           line_index: body.line_index,
           expected_line: data.line || body.expected_line,
           wrapper: wrapper
-        }, { hours: "", days: today() ? [today()] : [], after: reload });
+        }, {
+          hours: "",
+          days: today() ? [today()] : [],
+          tracked: trackedChip ? trackedChip.getAttribute("data-tracked") : "",
+          after: reload
+        });
         return;
       }
       if (reload) { window.setTimeout(reload, 800); }
@@ -268,7 +277,9 @@
     ((preset && preset.days) || []).forEach(function (day) { selected[day] = true; });
     var label = document.createElement("div");
     label.className = "time-pop-label";
-    label.textContent = "Hours spent (optional)";
+    label.textContent = preset && preset.tracked
+      ? "Extra hours (optional) \u2014 already tracked " + preset.tracked + "h"
+      : "Hours spent (optional)";
     node.appendChild(label);
     var input = document.createElement("input");
     input.type = "number";
@@ -379,13 +390,254 @@
     }, { hours: button.getAttribute("data-hours") || "", days: days });
   }
 
+  var trackPop = null;
+
+  function closeTrackPop() {
+    if (!trackPop) { return; }
+    var node = trackPop.node;
+    trackPop = null;
+    if (node && node.parentNode) { node.parentNode.removeChild(node); }
+  }
+
+  function placePop(node, anchor) {
+    var box = anchor.getBoundingClientRect();
+    var width = node.offsetWidth || 220;
+    var left = box.left + window.scrollX;
+    var limit = window.scrollX + document.documentElement.clientWidth - width - 8;
+    node.style.top = box.bottom + window.scrollY + 6 + "px";
+    node.style.left = Math.max(8, Math.min(left, limit)) + "px";
+  }
+
+  function shiftDay(iso, days) {
+    var when = new Date(iso + "T00:00:00");
+    if (isNaN(when.getTime())) { return iso; }
+    when.setDate(when.getDate() + days);
+    return isoDay(when);
+  }
+
+  function shortDay(iso) {
+    var when = new Date(iso + "T00:00:00");
+    if (isNaN(when.getTime())) { return iso; }
+    return when.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  function entriesOf(button) {
+    return (button.getAttribute("data-entries") || "").split(",").filter(function (part) {
+      return part;
+    }).map(function (part) {
+      var bits = part.split("=");
+      return { day: bits[0], hours: parseFloat(bits[1]) };
+    });
+  }
+
+  function addressOf(button) {
+    return {
+      key: button.getAttribute("data-key") || "",
+      id: button.getAttribute("data-id") || "",
+      line_index: parseInt(button.getAttribute("data-index"), 10),
+      expected_line: button.getAttribute("data-line") || ""
+    };
+  }
+
+  function trackBody(address, extra) {
+    var body = { key: address.key || "" };
+    if (address.id) {
+      body.id = address.id;
+    } else {
+      body.line_index = address.line_index;
+      body.expected_line = address.expected_line;
+    }
+    Object.keys(extra || {}).forEach(function (name) { body[name] = extra[name]; });
+    return body;
+  }
+
+  function openTrackPop(anchor, address, preset) {
+    closeTimePop();
+    closeTrackPop();
+    var node = document.createElement("div");
+    node.className = "time-pop";
+    var label = document.createElement("div");
+    label.className = "time-pop-label";
+    label.textContent = "Track time: " + (preset.title || "task");
+    node.appendChild(label);
+    var input = document.createElement("input");
+    input.type = "number";
+    input.step = "0.25";
+    input.min = "0";
+    input.max = "24";
+    input.className = "time-pop-hours";
+    input.placeholder = "0";
+    node.appendChild(input);
+    var quick = document.createElement("div");
+    quick.className = "time-pop-quick";
+    [0.25, 0.5, 1, 2, 4].forEach(function (value) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "chip-btn";
+      button.textContent = String(value);
+      button.addEventListener("click", function () {
+        input.value = String(value);
+        input.focus();
+      });
+      quick.appendChild(button);
+    });
+    node.appendChild(quick);
+    var dayLabel = document.createElement("div");
+    dayLabel.className = "time-pop-label";
+    dayLabel.textContent = "Day";
+    node.appendChild(dayLabel);
+    var chips = document.createElement("div");
+    chips.className = "time-pop-days";
+    var names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    var base = today() || isoDay(new Date());
+    var selected = preset.day || base;
+    var limitDay = shiftDay(base, 1);
+    weekDates().forEach(function (day, index) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "chip-day" + (day === selected ? " selected" : "");
+      button.textContent = names[index];
+      button.setAttribute("data-day", day);
+      if (day > limitDay) { button.disabled = true; }
+      button.addEventListener("click", function () {
+        selected = day;
+        chips.querySelectorAll(".chip-day").forEach(function (other) {
+          other.classList.toggle("selected", other === button);
+        });
+      });
+      chips.appendChild(button);
+    });
+    node.appendChild(chips);
+    if (preset.tracked && preset.tracked.length) {
+      var note = document.createElement("div");
+      note.className = "time-pop-note";
+      note.textContent = "Already tracked: " + (preset.trackedLabel || "0") + "h (" + preset.tracked.map(function (entry) {
+        return shortDay(entry.day) + " " + entry.hours;
+      }).join(", ") + ")";
+      node.appendChild(note);
+    }
+    var foot = document.createElement("div");
+    foot.className = "time-pop-foot";
+    var add = document.createElement("button");
+    add.type = "button";
+    add.className = "btn small primary";
+    add.textContent = "Add time";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn small";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", function () { closeTrackPop(); });
+    add.addEventListener("click", function () { saveTrackPop(address, input, selected, add); });
+    foot.appendChild(add);
+    foot.appendChild(cancel);
+    node.appendChild(foot);
+    document.body.appendChild(node);
+    placePop(node, anchor);
+    trackPop = { node: node };
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveTrackPop(address, input, selected, add);
+      }
+    });
+    input.focus();
+  }
+
+  function saveTrackPop(address, input, day, button) {
+    var raw = input.value.trim();
+    var hours = parseFloat(raw);
+    if (!raw || !isFinite(hours) || hours <= 0 || hours > 24) {
+      toast("Enter hours between 0 and 24");
+      return;
+    }
+    busy(button, true);
+    post("/api/task/time/add", trackBody(address, { hours: hours, day: day })).then(function () {
+      busy(button, false);
+      toast("Tracked " + hours + "h");
+      closeTrackPop();
+      window.location.reload();
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function openEntriesPop(anchor, address, preset) {
+    closeTimePop();
+    closeTrackPop();
+    var node = document.createElement("div");
+    node.className = "time-pop";
+    var label = document.createElement("div");
+    label.className = "time-pop-label";
+    label.textContent = "Tracked: " + (preset.trackedLabel || "0") + "h";
+    node.appendChild(label);
+    var list = document.createElement("div");
+    list.className = "time-pop-entries";
+    (preset.tracked || []).forEach(function (entry, index) {
+      var row = document.createElement("div");
+      row.className = "time-pop-entry";
+      var text = document.createElement("span");
+      text.textContent = shortDay(entry.day) + " \u2014 " + entry.hours + "h";
+      var remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "chip-btn";
+      remove.textContent = "\u00d7";
+      remove.title = "Remove entry";
+      remove.addEventListener("click", function () {
+        busy(remove, true);
+        post("/api/task/time/remove", trackBody(address, { entry_index: index })).then(function () {
+          busy(remove, false);
+          toast("Removed " + entry.hours + "h");
+          closeTrackPop();
+          window.location.reload();
+        }).catch(function (error) {
+          busy(remove, false);
+          fail(error);
+        });
+      });
+      row.appendChild(text);
+      row.appendChild(remove);
+      list.appendChild(row);
+    });
+    node.appendChild(list);
+    var foot = document.createElement("div");
+    foot.className = "time-pop-foot";
+    var close = document.createElement("button");
+    close.type = "button";
+    close.className = "btn small";
+    close.textContent = "Close";
+    close.addEventListener("click", function () { closeTrackPop(); });
+    foot.appendChild(close);
+    node.appendChild(foot);
+    document.body.appendChild(node);
+    placePop(node, anchor);
+    trackPop = { node: node };
+  }
+
+  function trackTime(button) {
+    openTrackPop(button, addressOf(button), {
+      title: button.getAttribute("data-title") || "",
+      tracked: entriesOf(button),
+      trackedLabel: button.getAttribute("data-tracked") || "",
+      day: today()
+    });
+  }
+
+  function entriesTime(button) {
+    openEntriesPop(button, addressOf(button), {
+      tracked: entriesOf(button),
+      trackedLabel: button.getAttribute("data-tracked") || ""
+    });
+  }
+
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && timePop) { closeTimePop(); }
+    if (event.key === "Escape" && trackPop) { closeTrackPop(); }
   });
 
   document.addEventListener("mousedown", function (event) {
-    if (!timePop || timePop.node.contains(event.target)) { return; }
-    closeTimePop();
+    if (timePop && !timePop.node.contains(event.target)) { closeTimePop(); }
+    if (trackPop && !trackPop.node.contains(event.target)) { closeTrackPop(); }
   });
 
   document.addEventListener("click", function (event) {
@@ -469,9 +721,17 @@
     if (action === "due-set") { return setDue(target); }
     if (action === "due-clear") { return clearDue(target); }
     if (action === "due-toggle") { return toggleDue(target); }
+    if (action === "task-launch") { return launchTask(target); }
+    if (action === "launch-set") { return setLaunch(target); }
+    if (action === "launch-reset") { return resetLaunch(target); }
+    if (action === "launch-none") { return clearLaunch(target); }
     if (action === "link-add") { return addLink(target); }
     if (action === "link-remove") { return removeLink(target); }
-    if (action === "open") { return openTarget(target); }
+    if (action === "task-link-add") { return taskLinkAdd(target); }
+    if (action === "task-link-remove") { return taskLinkRemove(target); }
+    if (action === "task-folder-set") { return taskFolderSet(target); }
+    if (action === "time-remove") { return removeTimeEntry(target); }
+    if (action === "open") { event.preventDefault(); return openTarget(target); }
     if (action === "open-all") { return openAll(target); }
     if (action === "toggle") { return handleTick(target, event); }
     if (action === "task-toggle") { return handleTick(target, event); }
@@ -481,6 +741,8 @@
     if (action === "task-cancel") { return cancelTask(target); }
     if (action === "task-delete") { return deleteTask(target); }
     if (action === "time-edit") { return editTime(target); }
+    if (action === "time-track") { return trackTime(target); }
+    if (action === "time-entries") { return entriesTime(target); }
     if (action === "quick-due") { return quickDue(target); }
     if (action === "card-expand") { return expandCard(target); }
     if (action === "new-task") { return openNewTask(); }
@@ -779,6 +1041,49 @@
     controls.hidden = !controls.hidden;
   }
 
+  function launchTask(button) {
+    var label = button.textContent.replace(/\u25B6/g, "").trim();
+    busy(button, true);
+    toast("Launching " + label + "\u2026");
+    post("/api/task/launch", {
+      key: button.getAttribute("data-key"),
+      task_id: button.getAttribute("data-task-id")
+    }).then(function () {
+      busy(button, false);
+      toast("Opened");
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function setLaunch(button) {
+    var row = button.closest(".task-row");
+    var taskId = button.getAttribute("data-task-id");
+    var input = row ? row.querySelector('.launch-input[data-task-id="' + taskId + '"]') : null;
+    post("/api/task/launch_set", {
+      key: button.getAttribute("data-key"),
+      task_id: taskId,
+      target: input ? input.value : ""
+    }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
+  function resetLaunch(button) {
+    post("/api/task/launch_set", {
+      key: button.getAttribute("data-key"),
+      task_id: button.getAttribute("data-task-id"),
+      reset: true
+    }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
+  function clearLaunch(button) {
+    post("/api/task/launch_set", {
+      key: button.getAttribute("data-key"),
+      task_id: button.getAttribute("data-task-id"),
+      target: ""
+    }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
   function addLink(button) {
     var key = button.getAttribute("data-key");
     var title = document.querySelector('.link-title[data-key="' + key + '"]');
@@ -798,10 +1103,53 @@
   }
 
   function openTarget(button) {
+    var taskId = button.getAttribute("data-task-id");
+    if (taskId) {
+      var body = { task_id: taskId, target: button.getAttribute("data-target") };
+      var index = button.getAttribute("data-index");
+      if (index !== null) { body.index = parseInt(index, 10); }
+      post("/api/open", body).catch(fail);
+      return;
+    }
     post("/api/open", {
       key: button.getAttribute("data-key"),
       what: button.getAttribute("data-what")
     }).catch(fail);
+  }
+
+  function taskLinkAdd(button) {
+    var taskId = button.getAttribute("data-task-id");
+    var title = document.querySelector('.link-title[data-task-id="' + taskId + '"]');
+    var url = document.querySelector('.link-url[data-task-id="' + taskId + '"]');
+    post("/api/task/links/add", {
+      task_id: taskId,
+      title: title ? title.value : "",
+      url: url ? url.value : ""
+    }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
+  function taskLinkRemove(button) {
+    post("/api/task/links/remove", {
+      task_id: button.getAttribute("data-task-id"),
+      index: parseInt(button.getAttribute("data-index"), 10)
+    }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
+  function taskFolderSet(button) {
+    var taskId = button.getAttribute("data-task-id");
+    var input = document.querySelector('.folder-input[data-task-id="' + taskId + '"]');
+    post("/api/task/folder", {
+      task_id: taskId,
+      folder: input ? input.value : ""
+    }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
+  function removeTimeEntry(button) {
+    post("/api/task/time/remove", {
+      key: button.getAttribute("data-key") || "",
+      id: button.getAttribute("data-task-id"),
+      entry_index: parseInt(button.getAttribute("data-index"), 10)
+    }).then(function () { window.location.reload(); }).catch(fail);
   }
 
   function openAll(button) {
@@ -923,11 +1271,14 @@
 
   function saveNote(button) {
     var key = button.getAttribute("data-key");
+    var taskId = button.getAttribute("data-task-id");
     var area = document.getElementById("note-text");
     var hash = button.getAttribute("data-hash");
     var warning = document.getElementById("note-conflict");
     if (!area) { return; }
-    post("/api/note/save", { key: key, text: area.value, base_hash: hash }).then(function (data) {
+    var body = { text: area.value, base_hash: hash };
+    if (taskId) { body.task_id = taskId; } else { body.key = key; }
+    post("/api/note/save", body).then(function (data) {
       button.setAttribute("data-hash", data.hash);
       if (warning) { warning.hidden = true; }
       document.dispatchEvent(new CustomEvent("hub:notesaved"));
@@ -960,12 +1311,14 @@
       var warning = document.getElementById("note-conflict");
       var save = document.getElementById("note-save");
       if (!area || !save) { return; }
-      post("/api/note/save", {
-        key: save.getAttribute("data-key"),
+      var forceBody = {
         text: area.value,
         base_hash: warning ? warning.getAttribute("data-current-hash") : "",
         force: true
-      }).then(function (data) {
+      };
+      var forceTask = save.getAttribute("data-task-id");
+      if (forceTask) { forceBody.task_id = forceTask; } else { forceBody.key = save.getAttribute("data-key"); }
+      post("/api/note/save", forceBody).then(function (data) {
         save.setAttribute("data-hash", data.hash);
         if (warning) { warning.hidden = true; }
         document.dispatchEvent(new CustomEvent("hub:notesaved"));

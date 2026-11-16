@@ -12,9 +12,10 @@
 </span>
 {%- endmacro %}
 
-{% macro tick_note(row, key) -%}
+{% macro tick_note(row, key, task_id="") -%}
 <span class="tick mark-{{ 'open' if row.mark == ' ' else 'x' if row.mark == 'x' else 'dash' }}" data-action="toggle" data-key="{{ key }}"
       data-index="{{ row.index }}" data-line="{{ row.line }}" data-mark="{{ row.mark }}"
+      {% if task_id %}data-note-task="{{ task_id }}"{% endif %}
       {% if row.task_id %}data-task-id="{{ row.task_id }}"{% endif %}>
   <input type="checkbox" class="tick-box"{% if row.mark == 'x' %} checked{% endif %} aria-label="Done">
   <button type="button" class="tick-na" title="Not needed" aria-label="Not needed">N/A</button>
@@ -26,8 +27,12 @@
 {% if item.hours and item.mark == "x" %}<button type="button" class="chip-time" data-action="time-edit" data-key="{{ item.key }}"{% if item.id %} data-id="{{ item.id }}"{% endif %}{% if item.line_index is not none %} data-index="{{ item.line_index }}" data-line="{{ item.line }}"{% endif %} data-hours="{{ item.hours_label }}" data-days="{{ item.worked_days|join(',') }}" title="Edit logged time">&#9201; {{ item.hours_label }}h</button>{% endif %}
 {%- endmacro %}
 
-{% macro ref_chip(item) -%}
-{% if item.ref %}<span class="chip-ref" title="SO / QTE">{{ item.ref }}</span>{% endif %}
+{% macro track_btn(item) -%}
+{% if item.mark == " " and (item.id or item.line_index is not none) %}<button type="button" class="chip-track" data-action="time-track" data-key="{{ item.key }}"{% if item.id %} data-id="{{ item.id }}"{% endif %}{% if item.line_index is not none %} data-index="{{ item.line_index }}" data-line="{{ item.line }}"{% endif %} data-title="{{ item.title }}" data-tracked="{{ item.tracked_label }}" data-entries="{% for entry in item.time_entries or [] %}{{ entry.day }}={{ entry.hours }}{% if not loop.last %},{% endif %}{% endfor %}" title="Track time">&#9201; Track</button>{% endif %}
+{% if item.tracked %}<button type="button" class="chip-time" data-action="time-entries" data-key="{{ item.key }}"{% if item.id %} data-id="{{ item.id }}"{% endif %}{% if item.line_index is not none %} data-index="{{ item.line_index }}" data-line="{{ item.line }}"{% endif %} data-tracked="{{ item.tracked_label }}" data-entries="{% for entry in item.time_entries or [] %}{{ entry.day }}={{ entry.hours }}{% if not loop.last %},{% endif %}{% endfor %}" title="Tracked time">&#9201; {{ item.tracked_label }}h</button>{% endif %}
+{%- endmacro %}
+
+{% macro ref_chip(item) -%}{% if item.ref %}<span class="chip-ref" title="SO / QTE">{{ item.ref }}</span>{% endif %}
 {%- endmacro %}
 
 {% macro manual_actions(item) -%}
@@ -86,7 +91,7 @@
     {% if item.id %}data-task-id="{{ item.id }}"{% endif %}>
   {{ tick(item) }}
   <div class="task-body">
-    <div class="task-title" title="{{ item.title }}">{{ item.title }}{% if item.category and item.category != "project" %}<span class="tag tag-cat">{{ item.category_label }}</span>{% endif %}{% if item.recur %}<span class="tag tag-recur" title="{{ item.recur }}">&#128257; {{ item.recur_label }}</span>{% endif %}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{{ time_chip(item) }}{% if item.key == "" %}{{ ref_chip(item) }}{% endif %}</div>
+    <div class="task-title" title="{{ item.title }}">{% if item.key == "" and item.id.startswith("m-") %}<a class="task-link" href="/t/{{ item.id }}">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}{% if item.category and item.category != "project" %}<span class="tag tag-cat">{{ item.category_label }}</span>{% endif %}{% if item.recur %}<span class="tag tag-recur" title="{{ item.recur }}">&#128257; {{ item.recur_label }}</span>{% endif %}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{{ time_chip(item) }}{{ track_btn(item) }}{% if item.key == "" and item.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="" data-task-id="{{ item.id }}" title="{{ item.launch }}">&#9654; {{ item.launch_label }}</button>{% endif %}{% if item.key == "" %}{{ ref_chip(item) }}{% endif %}</div>
     {% if item.notes %}<div class="small muted">{{ item.notes }}</div>{% endif %}
     {% if item.override_note %}<div class="small muted">{{ item.override_note }}</div>{% endif %}
     {% if item.kind == "manual" %}{{ manual_actions(item) }}{{ manual_edit(item) }}{% endif %}

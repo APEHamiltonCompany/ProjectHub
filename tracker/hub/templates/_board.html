@@ -30,7 +30,7 @@
           <div class="task-row" data-uid="{{ card.next_due.item.uid }}" data-mark="{{ card.next_due.item.mark }}">
             {{ macros.tick(card.next_due.item) }}
             <div class="task-body"><div class="task-title" title="{{ card.next_due.title }}">{{ card.next_due.title }}</div></div>
-            <div class="task-meta"><span class="nowrap small">{{ card.next_due.due }}</span></div>
+            <div class="task-meta"><span class="nowrap small">{{ card.next_due.due }}</span>{{ macros.track_btn(card.next_due.item) }}</div>
           </div>
         </div>
         {% endif %}

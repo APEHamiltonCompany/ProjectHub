@@ -150,6 +150,16 @@ Example, a weekly timesheet:
 - Unticking never deletes the copy that was added.
 - Recurring tasks show a `🔁 weekly` (or `daily`, `weekdays`, `every 2 weeks`, `monthly`) badge in lists and in the tasks table; hover it to see the full rule.
 - To stop a task repeating, clear **Repeat** in the Edit form.
+
+### 2.1e Task pages for My Tasks
+Every personal task (a line in `My Tasks.md` with an `m-` id) has its own page. Click the task title in the **My tasks** column, the tasks table or the Monday page, or open `/t/<id>` directly.
+
+- The first time you open the page the hub creates a small note at `My Tasks/<task title>/<task title>.md` and adds a `[note:: My Tasks/<task title>/<task title>.md]` token to the task line. The token is stripped from the title in lists and is kept when you edit the task, tick it, log time, or let a recurring task spawn its next copy.
+- The page mirrors a project page: tick, Edit, Track time and a shortcut button, a Notes panel with Rendered / Live edit / Edit text and the same save-and-conflict check, a Links panel, a Folder panel and a Time panel with the tracked entries.
+- Links accept an `https://` address (opens in a new browser tab) or an existing local file or folder path (opens from the hub). Remove a link with its Remove button.
+- The folder defaults to the note's own folder. **Change folder…** points it at another existing directory; Set with an empty box resets it.
+- **Shortcut** stores a launch target in the note's frontmatter. Once set, a ▶ button appears on the task page and next to the task in the My tasks column.
+
 ### 2.2 When a new project is assigned
 1. A Windows notification appears ("New project assignment: ...") and a banner shows at the top of the dashboard.
 2. Check the details: customer, SO/QTE, project number, level, team, SharePoint link.
@@ -168,6 +178,7 @@ Click a project name, or go to `http://localhost:8765/p/<project number>` (for e
 - **Open folder** opens the project folder in Explorer. **Open note in editor** opens the `.md` file in your default editor.
 - **Stage stepper and mini timeline**: where the project is, and its tasks on a small Gantt chart.
 - **Deadlines**: every step grouped by stage (My tasks, Pre-Fabrication, System Test, Closeout, Completion, PM schedule), with its due date, status and a checkbox. Click **⋯ adjust** on a row to override its date or add a blocker note. Use **By phase / By due date** in the panel header to switch to one list sorted by next due date (open tasks first, undated after, done at the bottom, each row tagged with its phase). The hub remembers your choice.
+- **Launch shortcut**: a deadline row can carry a one-click button that opens a local app, file, folder or https link. The default comes from `launch:` on a `workflow:` entry in `tracker/rules.yaml` (for example `launch: 'C:\repos\Wiring_Diagram_Generation_App\dist\WireDiagramBuilder.exe'` on Review CPR/SO and Wiring diagram). Change it for one project under **⋯ adjust** → **Shortcut**: **Set shortcut**, **Use template** or **No shortcut**. The project value is stored as `task_launch:` in the note frontmatter, so you can also edit it in Obsidian. It accepts a `.exe`, any file or folder, or an https link; in Explorer use Shift+right-click → **Copy as path** and paste. The hub waits up to 15 seconds for the launched app's window and brings it to the front.
 - **Note > Rendered**: the whole note with real checkboxes. Tick a box to mark it done; click **N/A** to mark it not needed. Each change is saved to the `.md` file immediately.
 - **Note > Edit text**: the text editor on the left and a live preview on the right. The preview's checkboxes are clickable too. Nothing is written until you click **Save**, and an "Unsaved changes" flag shows until you do. If the file changed somewhere else since you opened it (for example in OneDrive or Notepad), the hub warns you instead of overwriting. You can then reload, or overwrite on purpose.
 - **Note > Live edit**: edit the formatted note directly, like Obsidian's live preview. Every line is shown formatted; click a line to see and edit its markdown in place. **Enter** starts a new line (lists and checkboxes continue automatically; press Enter on an empty item to end the list), **Backspace** at the start of a line joins it to the line above, **Tab**/**Shift+Tab** indents, the arrow keys move between lines and **Esc** stops editing. Checkboxes and links work without entering edit mode. It shares the same **Save** button, unsaved flag and conflict warning as Edit text, and the two tabs stay in sync. Open it directly with `?tab=live` on the project URL.
@@ -193,6 +204,8 @@ The time is stored in the line in Obsidian/Dataview syntax, for example:
 - A done task with hours shows a `⏱ 2h` chip; click it to reopen the popover with the hours and days already filled in.
 - If you tick a recurring task, the page reload that adds the next occurrence waits until you close the popover.
 - **SO / QTE** is an optional field in **New task** and in the Edit form. It accepts `SO-123456` or `QTE-123456`; when you type a title that already contains one, it is offered as the placeholder. It is stored as `[ref:: SO-281090]` and shown as a small chip on personal task rows.
+
+**Track time** lets you log hours on a task without completing it. Open tasks show a `⏱ Track` button: click it, type the hours, pick the day (today by default) and press **Add time**. Each entry is appended to the line as `[time:: 2026-11-12=1.5, 2026-11-13=2]`, so the same day can appear more than once and the order is kept. The task keeps its checkbox state. Once a task has entries it shows a `⏱ 3.5h` chip; click the chip to see every entry and remove one with its **×**. When you later tick that task, the completion popover asks for **extra hours** only, because the tracked entries are already counted. The Timesheet counts each entry on its own day, for open and done tasks alike.
 
 ### 2.5 Change a due date or record a blocker
 On the project page, each open step has a date box and a note box:

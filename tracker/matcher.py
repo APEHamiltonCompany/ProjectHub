@@ -14,6 +14,11 @@ LEVEL_RE = re.compile(r"^L\d$", re.I)
 ASSIGNMENT_PREFIX_RE = re.compile(r"^\s*(?:(?:re|fw|fwd)\s*:\s*)*", re.I)
 ILLEGAL_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 ARCHIVE_DIR = "_Archive"
+TASKS_DIR = "My Tasks"
+
+
+def is_reserved_dir(name: str) -> bool:
+    return str(name).strip().lower() in (ARCHIVE_DIR.lower(), TASKS_DIR.lower())
 
 
 def extract_keys(text: str) -> dict[str, set[str]]:
@@ -136,7 +141,7 @@ def build_projects(vault: str | Path, exclude_folders: Iterable[str] = ()) -> li
             continue
         if entry.name.startswith(".") or entry.name.strip().lower() in excluded:
             continue
-        if entry.name.strip().lower() == ARCHIVE_DIR.lower():
+        if is_reserved_dir(entry.name):
             continue
         projects.append(project_from_folder(entry))
     return projects
