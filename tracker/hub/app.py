@@ -447,13 +447,25 @@ def create_app(
             pass
         return rows
 
+    def resolve_launch(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if text.startswith("tool:"):
+            text = str((cfg.get("tools") or {}).get(text[5:].strip()) or "").strip()
+            if not text:
+                return ""
+        if _is_http(text):
+            return text
+        return os.path.expandvars(text)
+
     def launch_target(key: str, task_id: str, frontmatter: dict | None = None) -> str:
         if not task_id:
             return ""
         if not key and task_id.startswith(tasks_mod.MANUAL_PREFIX):
             if frontmatter is None:
                 frontmatter = task_note_frontmatter(task_id)
-            return str((frontmatter or {}).get("launch") or "")
+            return resolve_launch((frontmatter or {}).get("launch") or "")
         if frontmatter is None:
             frontmatter = {}
             project = project_by_key(key) if key else None
@@ -467,10 +479,10 @@ def create_app(
         if isinstance(overrides, dict):
             for candidate in keys:
                 if candidate in overrides:
-                    return str(overrides.get(candidate) or "")
+                    return resolve_launch(overrides.get(candidate) or "")
         for candidate in keys:
             if template_launch.get(candidate):
-                return template_launch[candidate]
+                return resolve_launch(template_launch[candidate])
         return ""
 
     def mutate_state(fn):
@@ -1309,7 +1321,7 @@ def create_app(
         path = ensure_task_note(task_id, item["title"])
         data, _raw, _body = notes.split_frontmatter(notes.read_text(path)[0])
         folder = task_note_folder(data, path)
-        launch = str(data.get("launch") or "")
+        launch = launch_target("", task_id)
         return render_template(
             "task.html",
             task=item,

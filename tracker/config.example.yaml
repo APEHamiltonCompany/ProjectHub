@@ -1,0 +1,51 @@
+vault: ""
+personal_tasks_path: ""
+exclude_folders:
+  - General
+eml_folders:
+  - email_drop
+scan_project_folders: true
+outlook_com:
+  enabled: true
+  folders:
+    - Inbox
+  calendar: true
+  days_back: 60
+me:
+  name: ""
+  email: ""
+holidays:
+  - 2026-11-26
+  - 2026-11-27
+  - 2026-12-24
+  - 2026-12-25
+  - 2026-12-31
+  - 2027-01-01
+  - 2027-05-31
+  - 2027-07-05
+  - 2027-09-06
+auto_create_projects: false
+due_soon_days: 3
+pm_schedule_include: '(?i)test plan|parts for testing|prefab ?apps|apps|demo|fat|need-by|ship|close ?out'
+time_estimate_template: ""
+dashboard:
+  plotly_js: cdn
+timezone: local
+hub:
+  port: 8765
+  refresh_minutes: 15
+  toast: true
+ai:
+  enabled: false
+install_dashboard_note: false
+ape_sheet:
+  enabled: true
+  path: ""
+  pattern: "APE Project Tracking*.xlsx"
+  auto_find: true
+  sync_filename: "APE Project Tracking.xlsx"
+  my_initials: ""
+  stale_hours: 48
+  url: "https://hamiltonmarketing.sharepoint.com/:x:/s/RNOAPE/IQDm4sasM7CTR6tIlW4RZwudAQ5vAffff0kaw_GEz2RITfA?e=Jraqhi"
+tools:
+  wire_diagram_builder: ""

@@ -7,15 +7,15 @@ Chrome extension that turns a Project Hub project page into a Chrome tab group, 
 1. Open `chrome://extensions` in Chrome.
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked**.
-4. Select this folder (`C:\repos\Projects\ProjectHub\chrome_extension`).
+4. Select this folder (`<ProjectHub folder>\chrome_extension`).
 
 ## Use it
 
 1. Start the hub (`run_hub.cmd`, or the `ProjectHub` scheduled task).
-2. Open a project page, for example `http://localhost:8765/p/0207852`.
+2. Open a project page, for example `http://localhost:8765/p/0200000`.
 3. Click **Open as tab group**.
 
-The extension asks the hub for the project's links, then either adds any missing links to the existing tab group whose title matches the project or creates a new group containing the hub page plus every link. Links that are already open as loose (ungrouped) tabs, for example after **Open all links**, are moved into the group instead of being skipped. Group titles look like `Amgen Inc. QTE-056793`.
+The extension asks the hub for the project's links, then either adds any missing links to the existing tab group whose title matches the project or creates a new group containing the hub page plus every link. Links that are already open as loose (ungrouped) tabs, for example after **Open all links**, are moved into the group instead of being skipped. Group titles look like `Acme SO-123456 / 0200000`.
 
 Every click ends with a message at the bottom of the hub page: either "Tab group ... ready" or the reason it failed.
 

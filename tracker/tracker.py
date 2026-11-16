@@ -630,6 +630,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
+    if not config_path.is_file():
+        out("No config at %s. Run setup.cmd in the ProjectHub folder first." % config_path)
+        return 2
     cfg = load_config(config_path)
     with locking.file_lock(locking.lock_path_for(cfg)):
         return run(args, cfg, config_path)

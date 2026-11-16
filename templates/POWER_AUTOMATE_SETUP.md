@@ -4,7 +4,7 @@ Use the **browser** version at https://make.powerautomate.com, not the Power Aut
 Desktop's Outlook actions need classic Outlook, which is the part that didn't work.
 
 The flow saves each project email as a `.eml` file in your OneDrive:
-`OneDrive - Hamilton Company\Projects\_email_inbox` (the folder already exists, and the tracker already reads it).
+`OneDrive\Projects\_email_inbox` (create the folder once; the tracker already reads it).
 OneDrive syncs the file to this PC, and the tracker picks it up on its next run (weekdays at 6:30 AM, or `run_tracker.cmd`).
 
 ## Flow 1: Inbox
@@ -35,7 +35,7 @@ OneDrive syncs the file to this PC, and the tracker picks it up on its next run 
 
 1. Send yourself an email with the subject `Test SO-000000`.
 2. In **My flows > Project emails to tracker > Run history**, check that the run succeeded.
-3. Within a minute or two, a `.eml` file appears in `OneDrive - Hamilton Company\Projects\_email_inbox`.
+3. Within a minute or two, a `.eml` file appears in `OneDrive\Projects\_email_inbox`.
 4. Run `run_tracker.cmd`. The test email shows under **UNMATCHED EMAILS**, which is expected because SO-000000 isn't a real project.
 5. Delete the test `.eml` file.
 

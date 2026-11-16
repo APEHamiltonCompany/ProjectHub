@@ -12,43 +12,61 @@ Ground rules built into the system:
 
 ## Part 1: One-time setup
 
-### 1.1 Prerequisites
-1. **Python 3.12** at `C:\Users\Anthony.Zunino\AppData\Local\Programs\Python\Python312\` (already installed).
+### 1.1 Run setup.cmd
+Double-click `setup.cmd` in the ProjectHub folder (or run it from a terminal). It walks through everything and can be run again at any time to change your answers.
+
+What it does:
+1. **Python**: finds Python 3.10 or newer (`py -3.12`, then `py -3`, then `python`). If none is found it offers to install Python 3.12 with winget, or points you at the python.org download page.
+2. **Virtual environment**: creates `.venv` in the ProjectHub folder and installs `requirements.txt` into it.
+3. **Outlook**: checks that classic Outlook is registered and warns if it isn't.
+4. **Configuration**: runs the setup wizard, which asks for your name, work email, initials, project folder root, My Tasks file, time estimate template, an extra email drop folder, the WireDiagramBuilder path and the hub port, then writes `tracker\config.yaml`.
+5. **Background services**: optionally registers the **ProjectHub** logon task and the **ProjectTracker** 06:30 weekday task, starts the hub and waits up to 60 seconds for it to answer.
+6. **Desktop shortcut**: creates `Project Hub.url` on your desktop.
+7. **Chrome extension**: optionally opens the `chrome_extension` folder, copies its path to the clipboard and opens `chrome://extensions`.
+
+Rerun `setup.cmd` to change an answer: the wizard shows your current values in brackets and Enter keeps them. The previous config is saved as `tracker\config.yaml.bak`.
+
+### 1.2 Prerequisites
+1. **Python 3.10 or newer** (3.12 recommended). `setup.cmd` installs it if you agree.
 2. **Classic Outlook** (OUTLOOK.EXE), not "New Outlook". The tracker reads the Inbox and Calendar through classic Outlook. Keep it signed in. If it's closed when the tracker runs, the tracker tries to start it in the background.
 3. **Google Chrome**, for the tab-group extension (optional).
-4. The project folder root (the "vault"):
-   `C:\Users\Anthony.Zunino\OneDrive - Hamilton Company\Desktop\Projects\Project Specific Documents`
-5. The time-estimate template:
-   `C:\Users\Anthony.Zunino\OneDrive - Hamilton Company\Desktop\Projects\templates\TimeEstimates.xlsx`
+4. The project folder root (the "vault"), for example
+   `%OneDrive%\Desktop\Projects\Project Specific Documents`
+5. The time-estimate template, for example
+   `%OneDrive%\Desktop\Projects\templates\TimeEstimates.xlsx` (optional).
 
-### 1.2 Install the Python packages
-Open a terminal in `C:\repos\Projects\ProjectHub` and run:
+### 1.3 Manual setup
+If you would rather not use `setup.cmd`, run this from `<ProjectHub folder>`:
 ```bash
-python -m pip install --user -r requirements.txt
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+copy tracker\config.example.yaml tracker\config.yaml
+.venv\Scripts\python.exe -m tracker.setup_wizard
 ```
-
-### 1.3 Check the configuration
-Open `tracker\config.yaml` and check:
+Then check `tracker\config.yaml`:
 - `vault`: the project folder root above.
-- `me.name`: your name as it appears in PM schedules ("Anthony Zunino"). Rows assigned to you in a kickoff schedule are always tracked.
+- `me.name`: your name as it appears in PM schedules. Rows assigned to you in a kickoff schedule are always tracked.
 - `holidays`: company holidays. Deadlines are counted in business days and skip these dates.
 - `time_estimate_template`: path to `TimeEstimates.xlsx`.
 - `auto_create_projects: false`: new assignments wait in the hub for you to click **Create project**.
 - `hub.port` (8765), `hub.refresh_minutes` (15), `hub.toast` (true = Windows notification for new assignments).
+- `tools.wire_diagram_builder`: path to `WireDiagramBuilder.exe`. The launch shortcuts in `tracker\rules.yaml` refer to it as `tool:wire_diagram_builder`; leave it empty to hide those buttons.
+
+`tracker\config.yaml` is local and not tracked by git; `tracker\config.example.yaml` is the template.
 
 ### 1.4 Do a test run
 ```bash
-python -m tracker.tracker --dry-run
+.venv\Scripts\python.exe -m tracker.tracker --dry-run
 ```
 This prints what would change and writes nothing. If it looks right, do a real run:
 ```bash
-python -m tracker.tracker
+.venv\Scripts\python.exe -m tracker.tracker
 ```
 
 ### 1.5 Start the hub automatically at login
 Run this once in PowerShell:
 ```bash
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\repos\Projects\ProjectHub\install_hub_startup.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<ProjectHub folder>\install_hub_startup.ps1"
 ```
 This registers the scheduled task **ProjectHub**. It starts the hub hidden (pythonw) each time you log in, and the hub re-reads Outlook every 15 minutes. To start it right away without logging out:
 ```bash
@@ -56,13 +74,13 @@ powershell.exe -NoProfile -Command "Start-ScheduledTask -TaskName ProjectHub"
 ```
 To run the hub in a visible window instead (for troubleshooting), double-click `run_hub.cmd`. Stop the scheduled copy first, because only one copy can use port 8765.
 
-### 1.6 The early-morning tracker run (already installed)
-The scheduled task **ProjectTracker** runs the tracker on weekdays at 06:30, so the dashboard is fresh before the Monday 7 AM review even if the hub isn't running. It was registered with `install_schedule.ps1`. It and the hub share a lock file, so they never write at the same time.
+### 1.6 The early-morning tracker run
+The scheduled task **ProjectTracker** runs the tracker on weekdays at 06:30, so the dashboard is fresh before the Monday 7 AM review even if the hub isn't running. `setup.cmd` registers it with `install_schedule.ps1`. It and the hub share a lock file, so they never write at the same time.
 
 ### 1.7 Install the Chrome extension (optional, recommended)
 1. In Chrome, open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
-3. Click **Load unpacked** and choose `C:\repos\Projects\ProjectHub\chrome_extension`.
+3. Click **Load unpacked** and choose `<ProjectHub folder>\chrome_extension`.
 4. Bookmark `http://localhost:8765`.
 
 The extension is version 2.0.0. After updating it, click **Reload** on **Project Hub Tab Groups** in `chrome://extensions`; it re-attaches to the hub tabs you already have open. If it doesn't, press F5 on the hub page.
@@ -171,14 +189,14 @@ Every personal task (a line in `My Tasks.md` with an `m-` id) has its own page. 
 5. Due dates for the first steps appear after the automatic refresh that follows. Those steps are: review CPR/SO, ACE questions, and the time estimate (2 business days after assignment).
 
 ### 2.3 Work on a project (project page)
-Click a project name, or go to `http://localhost:8765/p/<project number>` (for example `/p/0207852`). The page has:
+Click a project name, or go to `http://localhost:8765/p/<project number>` (for example `/p/0200000`). The page has:
 - **Header**: customer, SO/QTE, level, stage, ship date with days left, design need-by date, team.
 - **Links**: SharePoint, CPR, RMT and other links found in the project's emails. Use **Add link** for your own (for example the pptx), and remove links you don't need.
 - **Open as tab group** (with the extension): creates a Chrome tab group named after the project, holding this page and every link. If the group already exists, it focuses that group instead.
 - **Open folder** opens the project folder in Explorer. **Open note in editor** opens the `.md` file in your default editor.
 - **Stage stepper and mini timeline**: where the project is, and its tasks on a small Gantt chart.
 - **Deadlines**: every step grouped by stage (My tasks, Pre-Fabrication, System Test, Closeout, Completion, PM schedule), with its due date, status and a checkbox. Click **⋯ adjust** on a row to override its date or add a blocker note. Use **By phase / By due date** in the panel header to switch to one list sorted by next due date (open tasks first, undated after, done at the bottom, each row tagged with its phase). The hub remembers your choice.
-- **Launch shortcut**: a deadline row can carry a one-click button that opens a local app, file, folder or https link. The default comes from `launch:` on a `workflow:` entry in `tracker/rules.yaml` (for example `launch: 'C:\repos\Wiring_Diagram_Generation_App\dist\WireDiagramBuilder.exe'` on Review CPR/SO and Wiring diagram). Change it for one project under **⋯ adjust** → **Shortcut**: **Set shortcut**, **Use template** or **No shortcut**. The project value is stored as `task_launch:` in the note frontmatter, so you can also edit it in Obsidian. It accepts a `.exe`, any file or folder, or an https link; in Explorer use Shift+right-click → **Copy as path** and paste. The hub waits up to 15 seconds for the launched app's window and brings it to the front.
+- **Launch shortcut**: a deadline row can carry a one-click button that opens a local app, file, folder or https link. The default comes from `launch:` on a `workflow:` entry in `tracker/rules.yaml` (for example `launch: 'tool:wire_diagram_builder'` on Review CPR/SO and Wiring diagram, which resolves through `tools.wire_diagram_builder` in `tracker/config.yaml`). Change it for one project under **⋯ adjust** → **Shortcut**: **Set shortcut**, **Use template** or **No shortcut**. The project value is stored as `task_launch:` in the note frontmatter, so you can also edit it in Obsidian. It accepts a `.exe`, any file or folder, or an https link; in Explorer use Shift+right-click → **Copy as path** and paste. The hub waits up to 15 seconds for the launched app's window and brings it to the front.
 - **Note > Rendered**: the whole note with real checkboxes. Tick a box to mark it done; click **N/A** to mark it not needed. Each change is saved to the `.md` file immediately.
 - **Note > Edit text**: the text editor on the left and a live preview on the right. The preview's checkboxes are clickable too. Nothing is written until you click **Save**, and an "Unsaved changes" flag shows until you do. If the file changed somewhere else since you opened it (for example in OneDrive or Notepad), the hub warns you instead of overwriting. You can then reload, or overwrite on purpose.
 - **Note > Live edit**: edit the formatted note directly, like Obsidian's live preview. Every line is shown formatted; click a line to see and edit its markdown in place. **Enter** starts a new line (lists and checkboxes continue automatically; press Enter on an empty item to end the list), **Backspace** at the start of a line joins it to the line above, **Tab**/**Shift+Tab** indents, the arrow keys move between lines and **Esc** stops editing. Checkboxes and links work without entering edit mode. It shares the same **Save** button, unsaved flag and conflict warning as Edit text, and the two tabs stay in sync. Open it directly with `?tab=live` on the project URL.
@@ -214,7 +232,7 @@ On the project page, each open step has a date box and a note box:
 - Changing the 📅 date directly in the note works too; the tracker keeps your date from then on.
 
 ### 2.6 Triage unclassified emails
-The **Unclassified emails** section lists emails that mention a project but don't match a workflow trigger. Example: "Amgen QTE-056793 Review".
+The **Unclassified emails** section lists emails that mention a project but don't match a workflow trigger. Example: "Acme QTE-123456 Review".
 - Click **Kickoff**, **Design review**, **Internal DR**, **WO firm** or **Closeout** to treat the email as that event. Its date then starts the matching deadlines.
 - Click **Ignore** to hide it.
 - Click a subject to open the email in Outlook (or the `.eml` file). Nothing about the email is changed: it is not marked read, moved or saved.
@@ -351,13 +369,13 @@ Logs: `output\last_run.log` (tracker runs), `output\hub_last_run.log` (latest hu
 ---
 
 ## Part 7: Command reference
-Run from `C:\repos\Projects\ProjectHub`:
+Run from `<ProjectHub folder>` (or double-click `run_tracker.cmd` / `run_hub.cmd`, which use `.venv` when it exists):
 ```bash
-python -m tracker.tracker --dry-run      # preview, writes nothing
-python -m tracker.tracker                # normal run
-python -m tracker.tracker --since 30     # only emails from the last 30 days
-python -m tracker.hub                    # run the hub in this window
-python -m unittest discover -s tests     # self-tests
+.venv\Scripts\python.exe -m tracker.tracker --dry-run      # preview, writes nothing
+.venv\Scripts\python.exe -m tracker.tracker                # normal run
+.venv\Scripts\python.exe -m tracker.tracker --since 30     # only emails from the last 30 days
+.venv\Scripts\python.exe -m tracker.hub                    # run the hub in this window
+.venv\Scripts\python.exe -m unittest discover -s tests     # self-tests
 ```
 
 ---
@@ -367,7 +385,7 @@ python -m unittest discover -s tests     # self-tests
 powershell.exe -NoProfile -Command "Unregister-ScheduledTask -TaskName ProjectHub -Confirm:$false"
 powershell.exe -NoProfile -Command "Unregister-ScheduledTask -TaskName ProjectTracker -Confirm:$false"
 ```
-Then remove the extension at `chrome://extensions` and delete `C:\repos\Projects\ProjectHub` if you no longer want it. Your project notes and folders stay in OneDrive. The tracker sections in the notes are plain Markdown and can stay or be deleted.
+Then remove the extension at `chrome://extensions`, delete the `Project Hub.url` shortcut from your desktop, and delete the `<ProjectHub folder>` (including `.venv`) if you no longer want it. Your project notes and folders stay in OneDrive. The tracker sections in the notes are plain Markdown and can stay or be deleted.
 
 ---
 
