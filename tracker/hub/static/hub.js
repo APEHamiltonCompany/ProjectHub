@@ -740,6 +740,8 @@
     if (action === "task-save") { return saveTask(target); }
     if (action === "task-cancel") { return cancelTask(target); }
     if (action === "task-delete") { return deleteTask(target); }
+    if (action === "task-archive") { return archiveTask(target); }
+    if (action === "task-unarchive") { return unarchiveTask(target); }
     if (action === "time-edit") { return editTime(target); }
     if (action === "time-track") { return trackTime(target); }
     if (action === "time-entries") { return entriesTime(target); }
@@ -1048,16 +1050,28 @@
     controls.hidden = !controls.hidden;
   }
 
+  function fileName(path) {
+    return String(path || "").split(/[\\/]/).pop();
+  }
+
   function launchTask(button) {
-    var label = button.textContent.replace(/\u25B6/g, "").trim();
+    var label = button.textContent.replace(/\u25B6|\uD83D\uDCC4/g, "").trim();
     busy(button, true);
     toast("Launching " + label + "\u2026");
     post("/api/task/launch", {
       key: button.getAttribute("data-key"),
       task_id: button.getAttribute("data-task-id")
-    }).then(function () {
+    }).then(function (data) {
       busy(button, false);
-      toast("Opened");
+      var created = (data && data.created) || [];
+      var existing = (data && data.existing) || [];
+      if (created.length) {
+        toast("Created " + fileName(created[0]));
+      } else if (existing.length) {
+        toast("Opened existing " + fileName(existing[0]));
+      } else {
+        toast("Opened");
+      }
     }).catch(function (error) {
       busy(button, false);
       fail(error);
@@ -1248,6 +1262,30 @@
       key: button.getAttribute("data-key") || "",
       id: button.getAttribute("data-id")
     }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
+  function archiveTask(button) {
+    busy(button, true);
+    post("/api/tasks/archive", {
+      key: button.getAttribute("data-key") || "",
+      id: button.getAttribute("data-id")
+    }).then(function () {
+      toast("Archived");
+      if (window.location.pathname.indexOf("/t/") === 0) { window.location.href = "/"; }
+      else { window.location.reload(); }
+    }).catch(function (error) { busy(button, false); fail(error); });
+  }
+
+  function unarchiveTask(button) {
+    busy(button, true);
+    post("/api/tasks/unarchive", {
+      key: button.getAttribute("data-key") || "",
+      id: button.getAttribute("data-id")
+    }).then(function () {
+      toast("Restored");
+      if (window.location.pathname.indexOf("/t/") === 0) { window.location.href = "/"; }
+      else { window.location.reload(); }
+    }).catch(function (error) { busy(button, false); fail(error); });
   }
 
   function quickDue(button) {

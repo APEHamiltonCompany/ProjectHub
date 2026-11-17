@@ -11,57 +11,37 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parent
-TRACKER = ROOT / "tracker"
-CONFIG_PATH = TRACKER / "config.yaml"
-EXAMPLE_PATH = TRACKER / "config.example.yaml"
-PLACEHOLDER = "YOUR.NAME"
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+CONFIG_PATH = HERE / "config.yaml"
+EXAMPLE_PATH = HERE / "config.example.yaml"
 
-sys.path.insert(0, str(ROOT))
-from tracker import settings as settings_mod  # noqa: E402
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from tracker import setup_wizard  # noqa: E402
 from tracker.matcher import LAYOUT_CUSTOMER, LAYOUTS  # noqa: E402
+from tracker.sources import resolve_folder  # noqa: E402
 
 
-def _git(key: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "config", key], cwd=ROOT, capture_output=True, text=True, timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        return result.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
+def load_base(target: Path = CONFIG_PATH, detect=setup_wizard.detect_defaults) -> tuple[dict, bool]:
+    """Example config overlaid with the existing config; blanks filled from detected defaults."""
+    existing = target.is_file()
+    cfg = setup_wizard.load_base(target)
+    return (cfg if existing else personalize(cfg, detect())), existing
 
 
-def _initials(name: str) -> str:
-    return "".join(part[0] for part in name.split() if part[:1].isalpha()).upper()
-
-
-def load_base() -> tuple[dict, bool]:
-    if CONFIG_PATH.is_file():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
-            return yaml.safe_load(fh) or {}, True
-    with open(EXAMPLE_PATH, "r", encoding="utf-8") as fh:
-        return personalize(yaml.safe_load(fh) or {}), False
-
-
-def personalize(cfg: dict) -> dict:
+def personalize(cfg: dict, detected: dict) -> dict:
     cfg = dict(cfg)
     for key in ("vault", "personal_tasks_path", "time_estimate_template"):
-        if PLACEHOLDER in str(cfg.get(key) or ""):
-            cfg[key] = ""
-    cfg["eml_folders"] = [(ROOT / "email_drop").as_posix()]
+        if not cfg.get(key) and detected.get(key):
+            cfg[key] = setup_wizard._fwd(detected[key])
     me = dict(cfg.get("me") or {})
-    if me.get("name") in (None, "", "Your Name"):
-        me["name"] = _git("user.name")
-    if "your.name" in str(me.get("email") or ""):
-        me["email"] = _git("user.email")
+    for key in ("name", "email"):
+        me[key] = me.get(key) or detected.get(key) or ""
     cfg["me"] = me
     ape = dict(cfg.get("ape_sheet") or {})
-    if PLACEHOLDER in str(ape.get("path") or ""):
-        ape["path"] = (Path.home() / "Downloads").as_posix()
-    if ape.get("my_initials") in (None, "", "XX"):
-        ape["my_initials"] = _initials(me.get("name") or "")
+    ape["path"] = ape.get("path") or (Path.home() / "Downloads").as_posix()
+    ape["my_initials"] = ape.get("my_initials") or detected.get("initials") or ""
     cfg["ape_sheet"] = ape
     return cfg
 
@@ -77,6 +57,8 @@ def form_from_config(cfg: dict) -> dict:
     me = cfg.get("me") or {}
     return {
         "name": str(me.get("name") or ""),
+        "email": str(me.get("email") or ""),
+        "wire_diagram_builder": str((cfg.get("tools") or {}).get("wire_diagram_builder") or ""),
         "initials": str(ape.get("my_initials") or ""),
         "vault": str(cfg.get("vault") or ""),
         "folder_layout": str(cfg.get("project_folder_layout") or LAYOUT_CUSTOMER),
@@ -135,7 +117,15 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
         warnings.append("Your name is empty: PM schedule rows assigned to you will not be recognised.")
     me = dict(cfg.get("me") or {})
     me["name"] = name
+    me["email"] = form.get("email", me.get("email") or "").strip()
     cfg["me"] = me
+
+    tool = _path(form.get("wire_diagram_builder", ""))
+    if tool and not Path(tool).is_file():
+        errors.append("WireDiagramBuilder.exe not found: %s" % tool)
+    tools = dict(cfg.get("tools") or {})
+    tools["wire_diagram_builder"] = tool
+    cfg["tools"] = tools
 
     vault = _path(form["vault"])
     if not vault:
@@ -156,8 +146,8 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
         elif not Path(tasks).parent.is_dir():
             errors.append("Folder for the personal tasks file does not exist: %s" % Path(tasks).parent.as_posix())
         cfg["personal_tasks_path"] = tasks
-    else:
-        cfg.pop("personal_tasks_path", None)
+    elif vault:
+        cfg["personal_tasks_path"] = vault + "/My Tasks.md"
 
     template = _path(form["time_estimate_template"])
     if template and not Path(template).is_file():
@@ -167,7 +157,7 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
     cfg["time_estimate_template"] = template
 
     folders = [_path(item) for item in form["eml_folders"] if _path(item)]
-    missing = [item for item in folders if not Path(item).is_dir()]
+    missing = [item for item in folders if not resolve_folder(item).is_dir() and Path(item).name != "email_drop"]
     if missing:
         warnings.append("These email folders do not exist and will be skipped:\n  " + "\n  ".join(missing))
     cfg["eml_folders"] = folders
@@ -238,20 +228,9 @@ def write_config(cfg: dict, path: Path = CONFIG_PATH) -> Path | None:
         backup = path.with_suffix(".yaml.bak")
         shutil.copy2(path, backup)
     text = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True, default_flow_style=False, width=1000)
-    header = "# Written by setup_wizard.py. See config.example.yaml for what each setting does.\n"
+    header = "# Written by the setup GUI (tracker/setup_gui.py). See config.example.yaml for what each setting does.\n"
     path.write_text(header + text, encoding="utf-8")
     return backup
-
-
-def clear_overlay_paths(config_path: Path = CONFIG_PATH) -> list[str]:
-    overlay_path = settings_mod.settings_path_for(config_path)
-    overlay = settings_mod.load_overlay(overlay_path)
-    removed = [key for key in settings_mod.TOP_KEYS if key in overlay]
-    if removed:
-        for key in removed:
-            overlay.pop(key)
-        settings_mod.save_overlay(overlay_path, overlay)
-    return removed
 
 
 def run_ui() -> None:
@@ -333,14 +312,16 @@ def run_ui() -> None:
                 defaultextension=".md", filetypes=[("Markdown", "*.md")], confirmoverwrite=False,
             )
         else:
+            types = [("Programs", "*.exe")] if kind == "exe" else [("Excel", "*.xlsx")]
             value = filedialog.askopenfilename(
-                parent=root, initialdir=start_dir(key), filetypes=[("Excel", "*.xlsx"), ("All files", "*.*")]
+                parent=root, initialdir=start_dir(key), filetypes=types + [("All files", "*.*")]
             )
         if value:
             variables[key].set(Path(value).as_posix())
 
     you = section("1. About you")
     row = entry(you, 0, "name", "Your name", "Exactly as it appears in PM kickoff schedules.")
+    row = entry(you, row, "email", "Work email")
     entry(you, row, "initials", "Initials", "As used in the APE Project Tracking sheet's assignment columns.")
 
     folders = section("2. Project files")
@@ -361,11 +342,15 @@ def run_ui() -> None:
     row += 2
     row = entry(
         folders, row, "personal_tasks_path", "Personal tasks file",
-        "Optional. Markdown file for non-project tasks; created on first use. Blank = <vault>/My Tasks.md.", "md",
+        "Markdown file for non-project tasks; created if missing. Blank = <vault>/My Tasks.md.", "md",
     )
-    entry(
+    row = entry(
         folders, row, "time_estimate_template", "TimeEstimates template",
         "Optional. Excel file copied into each new project folder.", "xlsx",
+    )
+    entry(
+        folders, row, "wire_diagram_builder", "WireDiagramBuilder.exe",
+        "Optional. Launched from wiring-diagram tasks in the hub.", "exe",
     )
 
     mail = section("3. Email sources")
@@ -445,17 +430,6 @@ def run_ui() -> None:
     texts["holidays"] = holidays
     hint(advanced, row + 1, "One YYYY-MM-DD date per line. Skipped when counting business-day deadlines.")
 
-    startup = section("5. Run automatically (optional)")
-    variables["task_hub"] = tk.BooleanVar(value=False)
-    variables["task_tracker"] = tk.BooleanVar(value=False)
-    ttk.Checkbutton(startup, text="Start the hub when I log in to Windows", variable=variables["task_hub"]).grid(
-        row=0, column=0, sticky="w"
-    )
-    ttk.Checkbutton(
-        startup, text="Run the tracker on weekdays at 06:30", variable=variables["task_tracker"]
-    ).grid(row=1, column=0, sticky="w")
-    hint(startup, 2, "Registers Windows scheduled tasks (ProjectHub / ProjectTracker) for your user.")
-
     log = tk.Text(body, height=12, wrap="word", state="disabled", background="#f7f7f7")
 
     def write_log(text: str) -> None:
@@ -482,7 +456,9 @@ def run_ui() -> None:
         backup = write_config(cfg)
         base.clear()
         base.update(cfg)
-        removed = clear_overlay_paths()
+        setup_wizard.ensure_files(cfg)
+        answers = {key: cfg.get(key) for key in setup_wizard.OVERLAY_KEYS}
+        removed = setup_wizard.clean_settings(CONFIG_PATH, answers)
         write_log("Saved %s\n" % CONFIG_PATH)
         if backup:
             write_log("Previous version kept as %s\n" % backup.name)
@@ -510,27 +486,15 @@ def run_ui() -> None:
 
     def test_run() -> None:
         if save():
-            run_command([sys.executable, "-m", "tracker.tracker", "--dry-run"], "Test run (dry run, writes nothing)")
-
-    def register_tasks() -> None:
-        scripts = []
-        if variables["task_hub"].get():
-            scripts.append("install_hub_startup.ps1")
-        if variables["task_tracker"].get():
-            scripts.append("install_schedule.ps1")
-        if not scripts:
-            messagebox.showinfo("Nothing selected", "Tick at least one option in section 5.", parent=root)
-            return
-        for script in scripts:
             run_command(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / script)], script
+                [sys.executable, "-m", "tracker.tracker", "--dry-run", "--config", str(CONFIG_PATH)],
+                "Test run (dry run, writes nothing)",
             )
 
     actions = ttk.Frame(body)
     actions.pack(fill="x", pady=(10, 6))
     ttk.Button(actions, text="Save", command=save).pack(side="left")
     ttk.Button(actions, text="Save and test run", command=test_run).pack(side="left", padx=6)
-    ttk.Button(actions, text="Register scheduled tasks", command=register_tasks).pack(side="left")
     ttk.Button(actions, text="Close", command=root.destroy).pack(side="right")
     log.pack(fill="both", expand=True)
 
@@ -539,3 +503,6 @@ def run_ui() -> None:
 
 if __name__ == "__main__":
     run_ui()
+    if not CONFIG_PATH.is_file():
+        print("Setup closed without saving tracker/config.yaml.")
+        sys.exit(1)

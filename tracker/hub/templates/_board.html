@@ -66,6 +66,7 @@
         {% endfor %}
       </div>
       {% if not personal %}<p class="muted small">Nothing personal right now.</p>{% endif %}
+      {{ macros.archived_list(archived_personal|default([])) }}
     </div>
   </div>
 </section>

@@ -38,8 +38,17 @@
 {% macro manual_actions(item) -%}
 <span class="row-actions">
   <button type="button" class="btn small ghost" data-action="task-edit" data-key="{{ item.key }}" data-id="{{ item.id }}">Edit</button>
+  <button type="button" class="btn small ghost" data-action="task-archive" data-key="{{ item.key }}" data-id="{{ item.id }}">Archive</button>
   <button type="button" class="btn small ghost danger" data-action="task-delete" data-key="{{ item.key }}" data-id="{{ item.id }}">Delete</button>
 </span>
+{%- endmacro %}
+
+{% macro archived_list(items) -%}
+{% if items %}
+<details class="archived-list"><summary>Archived ({{ items|length }})</summary><ul>
+  {% for item in items %}<li>{{ item.title }}<span class="row-actions"><button type="button" class="btn small ghost" data-action="task-unarchive" data-key="{{ item.key }}" data-id="{{ item.id }}">Restore</button> <button type="button" class="btn small ghost danger" data-action="task-delete" data-key="{{ item.key }}" data-id="{{ item.id }}">Delete</button></span></li>
+  {% endfor %}</ul></details>
+{% endif %}
 {%- endmacro %}
 
 {% macro manual_edit(item) -%}
@@ -91,7 +100,7 @@
     {% if item.id %}data-task-id="{{ item.id }}"{% endif %}>
   {{ tick(item) }}
   <div class="task-body">
-    <div class="task-title" title="{{ item.title }}">{% if item.key == "" and item.id.startswith("m-") %}<a class="task-link" href="/t/{{ item.id }}">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}{% if item.category and item.category != "project" %}<span class="tag tag-cat">{{ item.category_label }}</span>{% endif %}{% if item.recur %}<span class="tag tag-recur" title="{{ item.recur }}">&#128257; {{ item.recur_label }}</span>{% endif %}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{{ time_chip(item) }}{{ track_btn(item) }}{% if item.key == "" and item.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="" data-task-id="{{ item.id }}" title="{{ item.launch }}">&#9654; {{ item.launch_label }}</button>{% endif %}{% if item.key == "" %}{{ ref_chip(item) }}{% endif %}</div>
+    <div class="task-title" title="{{ item.title }}">{% if item.key == "" and item.id.startswith("m-") %}<a class="task-link" href="/t/{{ item.id }}">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}{% if item.category and item.category != "project" %}<span class="tag tag-cat">{{ item.category_label }}</span>{% endif %}{% if item.recur %}<span class="tag tag-recur" title="{{ item.recur }}">&#128257; {{ item.recur_label }}</span>{% endif %}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{{ time_chip(item) }}{{ track_btn(item) }}{% if item.key == "" and item.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="" data-task-id="{{ item.id }}" title="{{ item.launch_title or item.launch }}">{% if item.launch_kind == "template" %}&#128196;{% else %}&#9654;{% endif %} {{ item.launch_label }}</button>{% endif %}{% if item.key == "" %}{{ ref_chip(item) }}{% endif %}</div>
     {% if item.notes %}<div class="small muted">{{ item.notes }}</div>{% endif %}
     {% if item.override_note %}<div class="small muted">{{ item.override_note }}</div>{% endif %}
     {% if item.kind == "manual" %}{{ manual_actions(item) }}{{ manual_edit(item) }}{% endif %}

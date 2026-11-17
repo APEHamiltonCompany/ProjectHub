@@ -155,6 +155,34 @@ def _launch_label(target: str) -> str:
     return path.stem if path.suffix else path.name
 
 
+def _template_label(name: str, spec: dict) -> str:
+    label = str(spec.get("label") or "").strip()
+    if label:
+        return label
+    pattern = str(spec.get("name") or "").strip() or str(name or "")
+    stem = Path(pattern).stem if Path(pattern).suffix else pattern
+    text = re.sub(r"\{[^}]*\}", "", stem)
+    text = re.sub(r"\s+", " ", text).strip(" -_.")
+    return text or str(name or "")
+
+
+def _template_title(spec: dict) -> str:
+    return "%s \u2192 %s" % (str(spec.get("source") or ""), str(spec.get("name") or ""))
+
+
+def _ref_buckets(ref: str) -> tuple[list[str], list[str]]:
+    text = str(ref or "").strip()
+    if text.upper().startswith("SO-"):
+        return [text], []
+    if text.upper().startswith("QTE-"):
+        return [], [text]
+    return [], []
+
+
+def apply_fill(path: str | Path, fill: dict, tokens: dict) -> None:
+    return None
+
+
 def _inline(text: str) -> str:
     html = str(escape(text))
     html = BOLD_RE.sub(r"<strong>\1</strong>", html)
@@ -450,13 +478,50 @@ def create_app(
             pass
         return rows
 
+    def resolve_launch(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if text.startswith("tool:"):
+            text = str((cfg.get("tools") or {}).get(text[5:].strip()) or "").strip()
+            if not text:
+                return ""
+        elif text.startswith("template:"):
+            name = text[9:].strip()
+            spec = (cfg.get("file_templates") or {}).get(name)
+            if not isinstance(spec, dict) or not str(spec.get("source") or "").strip():
+                return ""
+            return "template:%s" % name
+        if _is_http(text):
+            return text
+        return os.path.expandvars(text)
+
+    def launch_label_for(target: str) -> str:
+        text = str(target or "")
+        if not text.startswith("template:"):
+            return _launch_label(text)
+        name = text[9:].strip()
+        spec = (cfg.get("file_templates") or {}).get(name)
+        return _template_label(name, spec if isinstance(spec, dict) else {})
+
+    def launch_meta(target: str) -> dict:
+        text = str(target or "")
+        if not text.startswith("template:"):
+            return {"launch_kind": "open", "launch_title": text}
+        name = text[9:].strip()
+        spec = (cfg.get("file_templates") or {}).get(name)
+        return {
+            "launch_kind": "template",
+            "launch_title": _template_title(spec if isinstance(spec, dict) else {}),
+        }
+
     def launch_target(key: str, task_id: str, frontmatter: dict | None = None) -> str:
         if not task_id:
             return ""
         if not key and task_id.startswith(tasks_mod.MANUAL_PREFIX):
             if frontmatter is None:
                 frontmatter = task_note_frontmatter(task_id)
-            return str((frontmatter or {}).get("launch") or "")
+            return resolve_launch((frontmatter or {}).get("launch") or "")
         if frontmatter is None:
             frontmatter = {}
             project = project_by_key(key) if key else None
@@ -470,11 +535,109 @@ def create_app(
         if isinstance(overrides, dict):
             for candidate in keys:
                 if candidate in overrides:
-                    return str(overrides.get(candidate) or "")
+                    return resolve_launch(overrides.get(candidate) or "")
         for candidate in keys:
             if template_launch.get(candidate):
-                return template_launch[candidate]
+                return resolve_launch(template_launch[candidate])
         return ""
+
+    def template_spec(name: str) -> dict:
+        spec = (cfg.get("file_templates") or {}).get(str(name or "").strip())
+        return spec if isinstance(spec, dict) else {}
+
+    def template_tokens(key: str, task_id: str) -> dict:
+        project = project_by_key(key) if key else None
+        if project is not None:
+            so = [str(item) for item in project.get("so") or []]
+            qte = [str(item) for item in project.get("qte") or []]
+            project_no = str(project.get("project_no") or "")
+            customer = str(project.get("customer") or "")
+            folder = Path(str(project.get("folder") or ""))
+        else:
+            row = personal_task_row(task_id) or {}
+            so, qte = _ref_buckets(str(row.get("ref") or ""))
+            project_no = ""
+            customer = ""
+            path = ensure_task_note(task_id, str(row.get("title") or task_id))
+            data, _raw, _body = notes.split_frontmatter(notes.read_text(path)[0])
+            folder = task_note_folder(data, path)
+        ident = so[0] if so else qte[0] if qte else project_no
+        return {
+            "ident": ident,
+            "so": so[0] if so else "",
+            "qte": qte[0] if qte else "",
+            "project_no": project_no,
+            "customer": customer,
+            "date": date.today().isoformat(),
+            "project_folder": str(folder),
+        }
+
+    def fill_tokens(text: str, tokens: dict) -> str:
+        def replace(match):
+            value = str(tokens.get(match.group(1)) or "").strip()
+            if not value:
+                raise ValueError("this project has no %s" % match.group(1))
+            return value
+
+        return re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", replace, str(text or ""))
+
+    def template_destinations(spec: dict, tokens: dict, source: Path) -> list[Path]:
+        pattern = str(spec.get("name") or "").strip()
+        if not pattern:
+            raise ValueError("template has no name pattern")
+        name = NOTE_BAD_RE.sub("", fill_tokens(pattern, tokens)).strip().strip(".")
+        if not Path(name).suffix:
+            name = name + source.suffix
+        folders = spec.get("folders") or ["{project_folder}"]
+        dests = []
+        for entry in folders:
+            folder = Path(os.path.expandvars(fill_tokens(str(entry), tokens)))
+            if not notes.lp(folder).is_dir():
+                raise ValueError("folder not found: %s" % folder)
+            dests.append(folder / name)
+        return dests
+
+    def copy_template(source: Path, dest: Path) -> bool:
+        if notes.lp(dest).exists():
+            return False
+        tmp = dest.with_name("%s.%s.tmp" % (dest.name, secrets.token_hex(4)))
+        try:
+            shutil.copy2(source, tmp)
+            os.replace(tmp, dest)
+        except OSError:
+            try:
+                notes.lp(tmp).unlink()
+            except OSError:
+                pass
+            raise
+        return True
+
+    def make_from_template(name: str, key: str, task_id: str) -> dict:
+        spec = template_spec(name)
+        if not spec:
+            raise LookupError("unknown template: %s" % name)
+        raw = str(spec.get("source") or "").strip()
+        source = Path(os.path.expandvars(raw))
+        if not raw or not notes.lp(source).is_file():
+            raise FileNotFoundError("template not found: %s" % source)
+        tokens = template_tokens(key, task_id)
+        dests = template_destinations(spec, tokens, source)
+        source_key = os.path.normcase(str(Path(source).resolve()))
+        for dest in dests:
+            if os.path.normcase(str(Path(dest).resolve())) == source_key:
+                raise ValueError("destination is the template: %s" % dest)
+        created = []
+        existing = []
+        for dest in dests:
+            if copy_template(source, dest):
+                apply_fill(dest, spec.get("fill") or {}, tokens)
+                created.append(str(dest))
+            else:
+                existing.append(str(dest))
+        primary = str(dests[0])
+        opener = app.config.get("LAUNCHER") or launcher
+        opener(primary)
+        return {"launched": primary, "created": created, "existing": existing}
 
     def mutate_state(fn):
         with mutex:
@@ -788,9 +951,10 @@ def create_app(
             return query
         return ui_prefs()["layout"]
 
-    def live_tasks(today: date) -> list[dict]:
+    def live_tasks(today: date, archived: bool = False) -> list[dict]:
+        cache_name = "_hub_live_archived" if archived else "_hub_live_tasks"
         try:
-            cached = getattr(g, "_hub_live_tasks", None)
+            cached = getattr(g, cache_name, None)
         except RuntimeError:
             cached = None
         if cached is not None:
@@ -838,7 +1002,12 @@ def create_app(
                 source = "template"
             else:
                 source = ""
-            return {"launch": target, "launch_label": _launch_label(target), "launch_source": source}
+            return {
+                "launch": target,
+                "launch_label": launch_label_for(target),
+                "launch_source": source,
+                **launch_meta(target),
+            }
 
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
@@ -851,7 +1020,7 @@ def create_app(
             path = project.get("note_path") or ""
             if path and notes.lp(path).is_file():
                 text, _nl, _bom, _enc = notes.read_text(path)
-                parsed = tasks_mod.parse_lines(text)
+                parsed = tasks_mod.parse_lines(text, archived=archived)
                 data, _raw, _body = notes.split_frontmatter(text)
                 if isinstance(data.get("task_launch"), dict):
                     launch_overrides = data["task_launch"]
@@ -859,7 +1028,7 @@ def create_app(
             for row in parsed:
                 if row["id"]:
                     by_id.setdefault(row["id"], row)
-            for task in project.get("tasks") or []:
+            for task in [] if archived else project.get("tasks") or []:
                 task_id = task.get("id") or ""
                 entry = by_id.get(task_id)
                 stage = task.get("stage") or ""
@@ -938,7 +1107,7 @@ def create_app(
                 )
         if notes.lp(live["personal_path"]).is_file():
             text, _nl, _bom, _enc = notes.read_text(live["personal_path"])
-            for row in tasks_mod.parse_lines(text):
+            for row in tasks_mod.parse_lines(text, archived=archived):
                 if row["id"].startswith(tasks_mod.MANUAL_PREFIX):
                     kind = "manual"
                 elif row["due"] is not None:
@@ -985,13 +1154,52 @@ def create_app(
                             "ref": row["ref"],
                             "ref_suggested": tasks_mod.suggest_ref(row["title"], row["notes"]),
                             "launch": launch,
-                            "launch_label": _launch_label(launch),
+                            "launch_label": launch_label_for(launch),
                             "launch_source": "task" if launch else "",
+                            **launch_meta(launch),
                         }
                     )
                 )
         items.sort(key=lambda item: (item["due"] is None, item["due"] or "", item["project_name"], item["title"]))
-        g._hub_live_tasks = items
+        setattr(g, cache_name, items)
+        return items
+
+    def archived_tasks() -> list[dict]:
+        items: list[dict] = []
+        for project in snapshot().get("projects") or []:
+            path = project.get("note_path") or ""
+            if not path or not notes.lp(path).is_file():
+                continue
+            text, _nl, _bom, _enc = notes.read_text(path)
+            for row in tasks_mod.parse_lines(text, archived=True):
+                if not row["id"].startswith(tasks_mod.MANUAL_PREFIX):
+                    continue
+                items.append(
+                    {
+                        "key": project.get("key") or "",
+                        "id": row["id"],
+                        "title": row["title"],
+                        "project_name": project.get("name") or "",
+                        "mark": row["mark"],
+                    }
+                )
+        if notes.lp(live["personal_path"]).is_file():
+            text, _nl, _bom, _enc = notes.read_text(live["personal_path"])
+            for row in tasks_mod.parse_lines(text, archived=True):
+                if not row["id"].startswith(tasks_mod.MANUAL_PREFIX):
+                    continue
+                category = row["category"] or "personal"
+                items.append(
+                    {
+                        "key": "",
+                        "id": row["id"],
+                        "title": row["title"],
+                        "project_name": tasks_mod.CATEGORY_LABELS.get(
+                            category, tasks_mod.CATEGORY_LABELS["personal"]
+                        ),
+                        "mark": row["mark"],
+                    }
+                )
         return items
 
     def task_row(item: dict) -> dict:
@@ -1244,6 +1452,7 @@ def create_app(
             done_week=done_week,
             personal=personal,
             personal_groups=group_by_category(personal),
+            archived_personal=[item for item in archived_tasks() if item["key"] == ""],
             stages=stages + ["Other"],
             layout=current_layout(),
         )
@@ -1308,6 +1517,7 @@ def create_app(
             tasks=tasks,
             stages=lifecycle or stages,
             gantt=gantt,
+            archived_project=[item for item in archived_tasks() if item["key"] == key],
             layout=current_layout(),
         )
 
@@ -1325,7 +1535,7 @@ def create_app(
         path = ensure_task_note(task_id, item["title"])
         data, _raw, _body = notes.split_frontmatter(notes.read_text(path)[0])
         folder = task_note_folder(data, path)
-        launch = str(data.get("launch") or "")
+        launch = launch_target("", task_id)
         return render_template(
             "task.html",
             task=item,
@@ -1334,7 +1544,8 @@ def create_app(
             folder=str(folder),
             files=folder_files(folder),
             launch=launch,
-            launch_label=_launch_label(launch),
+            launch_label=launch_label_for(launch),
+            **launch_meta(launch),
             layout=current_layout(),
         )
 
@@ -1496,7 +1707,7 @@ def create_app(
             start, end = default_start, default_end
         state = state_mod.load(state_path)
         data = timesheet_mod.build(
-            live_tasks(today),
+            live_tasks(today) + live_tasks(today, archived=True),
             snapshot(),
             state.get("tick_log") or [],
             state.get("timesheet_edits") or {},
@@ -1595,7 +1806,7 @@ def create_app(
             return jsonify({"error": "bad total"}), 400
         state = state_mod.load(state_path)
         data = timesheet_mod.build(
-            live_tasks(date.today()),
+            live_tasks(date.today()) + live_tasks(date.today(), archived=True),
             snapshot(),
             state.get("tick_log") or [],
             state.get("timesheet_edits") or {},
@@ -2558,6 +2769,46 @@ def create_app(
                 notes.write_text(path, new_text, newline, bom, encoding)
         return jsonify({"ok": True, "id": task_id})
 
+    @app.post("/api/tasks/archive")
+    def api_tasks_archive():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        task_id = str(payload.get("id") or "")
+        if not task_id.startswith(tasks_mod.MANUAL_PREFIX):
+            return jsonify({"error": "only manual tasks can be archived"}), 400
+        path = task_path(key)
+        if path is None:
+            return jsonify({"error": "unknown project or note missing"}), 404
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                try:
+                    new_text = tasks_mod.archive_manual(text, task_id)
+                except KeyError:
+                    return jsonify({"error": "unknown task"}), 404
+                notes.write_text(path, new_text, newline, bom, encoding)
+        return jsonify({"ok": True, "id": task_id})
+
+    @app.post("/api/tasks/unarchive")
+    def api_tasks_unarchive():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        task_id = str(payload.get("id") or "")
+        if not task_id.startswith(tasks_mod.MANUAL_PREFIX):
+            return jsonify({"error": "only manual tasks can be archived"}), 400
+        path = task_path(key)
+        if path is None:
+            return jsonify({"error": "unknown project or note missing"}), 404
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                try:
+                    new_text = tasks_mod.unarchive_manual(text, task_id)
+                except KeyError:
+                    return jsonify({"error": "unknown task"}), 404
+                notes.write_text(path, new_text, newline, bom, encoding)
+        return jsonify({"ok": True, "id": task_id})
+
     @app.post("/api/task/toggle")
     def api_task_toggle():
         payload = request.get_json(silent=True) or {}
@@ -2764,6 +3015,16 @@ def create_app(
         target = launch_target(key, task_id)
         if not target:
             return jsonify({"error": "no shortcut for this task"}), 404
+        if target.startswith("template:"):
+            try:
+                result = make_from_template(target[9:].strip(), key, task_id)
+            except (LookupError, FileNotFoundError) as exc:
+                return jsonify({"error": str(exc)}), 404
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            except OSError as exc:
+                return jsonify({"error": str(exc)}), 500
+            return jsonify(result)
         if not _is_http(target) and not notes.lp(target).exists():
             return jsonify({"error": "not found: %s" % target}), 404
         opener = app.config.get("LAUNCHER") or launcher
@@ -2783,7 +3044,14 @@ def create_app(
         reset = bool(payload.get("reset"))
         target = str(payload.get("target") or "").strip().strip('"').strip("'").strip()
         if not reset and target and not _is_http(target) and not notes.lp(target).exists():
-            return jsonify({"error": "target must be an existing file/folder or an http(s) link"}), 400
+            if target.startswith("template:"):
+                if not template_spec(target[9:].strip()):
+                    return jsonify({"error": "unknown template: %s" % target[9:].strip()}), 400
+            elif target.startswith("tool:"):
+                if target[5:].strip() not in (cfg.get("tools") or {}):
+                    return jsonify({"error": "unknown tool: %s" % target[5:].strip()}), 400
+            else:
+                return jsonify({"error": "target must be an existing file/folder or an http(s) link"}), 400
         if not key and task_id.startswith(tasks_mod.MANUAL_PREFIX):
             row = personal_task_row(task_id) or {}
             note_path = ensure_task_note(task_id, row.get("title") or task_id)

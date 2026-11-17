@@ -26,6 +26,11 @@ def main(argv: list[str] | None = None) -> int:
         if sys.stderr is None:
             sys.stderr = handle
 
+    config_path = Path(args.config)
+    if not config_path.is_file():
+        sys.stderr.write("No config at %s. Run setup.cmd in the ProjectHub folder first.\n" % config_path)
+        return 2
+
     app = create_app(args.config, port=args.port, no_refresh=args.no_refresh)
     app.run(host="127.0.0.1", port=int(app.config["HUB_PORT"]), debug=False, use_reloader=False)
     return 0

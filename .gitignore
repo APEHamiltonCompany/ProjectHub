@@ -12,6 +12,7 @@ output/
 tracker/state.json
 tracker/settings.json
 tracker/config.yaml
+tracker/config.yaml.bak
 *.flock
 
 # Local backups and synced working data

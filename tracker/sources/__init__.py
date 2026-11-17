@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Iterable, Optional
 
 from ..models import Email
 from . import eml_folder, outlook_com
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def resolve_folder(folder: str | Path) -> Path:
+    path = Path(folder)
+    return path if path.is_absolute() else ROOT / path
 
 
 def dedupe(emails: Iterable[Email]) -> list[Email]:
@@ -18,7 +26,7 @@ def dedupe(emails: Iterable[Email]) -> list[Email]:
 def collect_all(config: dict, since_days: Optional[int] = None) -> list[Email]:
     if not since_days:
         since_days = int((config.get("outlook_com") or {}).get("days_back") or 120)
-    folders = list(config.get("eml_folders") or [])
+    folders = [resolve_folder(folder) for folder in (config.get("eml_folders") or [])]
     if config.get("scan_project_folders") and config.get("vault"):
         folders.append(config["vault"])
     emails: list[Email] = []

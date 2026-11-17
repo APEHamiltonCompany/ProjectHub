@@ -1,24 +1,25 @@
 # ProjectHub configuration template.
-# Run setup.cmd (the setup wizard) to create your own tracker/config.yaml from this file.
+# Run setup.cmd to create your own tracker/config.yaml from this file.
 # tracker/config.yaml is per-user and gitignored; edit this template only to change the defaults for everyone.
 
 # --- Inputs you provide -------------------------------------------------------
 
-# Folder whose direct subfolders are your projects (one folder per project, with a .md note inside).
-vault: "C:/Users/YOUR.NAME/OneDrive - Hamilton Company/Desktop/Projects/Project Specific Documents"
-# Markdown file for non-project tasks. Created automatically on first use. Default: <vault>/My Tasks.md
-personal_tasks_path: "C:/Users/YOUR.NAME/OneDrive - Hamilton Company/Desktop/Projects/Project Specific Documents/My Tasks.md"
+# Folder that holds your projects (see project_folder_layout).
+vault: ""
 # How new project folders are named inside the vault:
 #   customer/so  ->  <vault>/<Customer>/SO-######   (QTE-###### or the project number if there is no SO)
 #   flat         ->  <vault>/<Customer> SO-###### <project number>
-# Both layouts are always recognised when reading the vault, so existing folders keep working.
+# Both layouts are recognised when reading the vault, so existing folders keep working.
 project_folder_layout: customer/so
+# Markdown file for non-project tasks. Created automatically. Default: <vault>/My Tasks.md
+personal_tasks_path: ""
 # Vault subfolders that are not projects.
 exclude_folders:
   - General
-# Folders searched (recursively) for saved .eml/.msg emails. Missing folders are skipped.
+# Folders searched (recursively) for saved .eml/.msg emails. Relative paths are inside the repo.
+# Missing folders are skipped.
 eml_folders:
-  - "C:/repos/ProjectHub/email_drop"
+  - email_drop
 # Also search the vault project folders for saved emails.
 scan_project_folders: true
 # Classic Outlook (not "New Outlook") access, read-only.
@@ -31,9 +32,9 @@ outlook_com:
   days_back: 60
 me:
   # Your name exactly as it appears in PM kickoff schedules.
-  name: Your Name
+  name: ""
   # Not currently used by the code.
-  email: your.name@hamiltoncompany.com
+  email: ""
 # Company holidays; skipped when counting business-day deadlines.
 holidays:
   - 2026-11-26
@@ -51,8 +52,8 @@ auto_create_projects: false
 due_soon_days: 3
 # Regex of extra PM schedule rows to track besides the ones assigned to you.
 pm_schedule_include: '(?i)test plan|parts for testing|prefab ?apps|apps|demo|fat|need-by|ship|close ?out'
-# Excel file copied into each new project folder as <date>_TimeEstimates.xlsx. Skipped if missing.
-time_estimate_template: "C:/Users/YOUR.NAME/OneDrive - Hamilton Company/Desktop/Projects/templates/TimeEstimates.xlsx"
+# Excel file copied into each new project folder as <date>_TimeEstimates.xlsx. Skipped if blank or missing.
+time_estimate_template: ""
 
 # --- Program output (created automatically; defaults are inside this repo) -----
 # snapshot_path: output/snapshot.json
@@ -80,13 +81,25 @@ install_dashboard_note: false
 ape_sheet:
   enabled: true
   # Fallback folder searched for the workbook (e.g. where you download it).
-  path: "C:/Users/YOUR.NAME/Downloads"
+  path: ""
   pattern: "APE Project Tracking*.xlsx"
   # Look for a OneDrive-synced copy named sync_filename first.
   auto_find: true
   sync_filename: "APE Project Tracking.xlsx"
   # Your initials as used in the sheet's assignment columns.
-  my_initials: XX
+  my_initials: ""
   # Hours after which a downloaded copy is flagged as stale.
   stale_hours: 48
   url: "https://hamiltonmarketing.sharepoint.com/:x:/s/RNOAPE/IQDm4sasM7CTR6tIlW4RZwudAQ5vAffff0kaw_GEz2RITfA?e=Jraqhi"
+
+# --- Optional tools and file templates -------------------------------------------
+tools:
+  # WireDiagramBuilder.exe, launched from wiring-diagram tasks.
+  wire_diagram_builder: ""
+# Files copied into a project folder from the hub. {ident} = SO/QTE, {project_folder} = the project folder.
+file_templates:
+  parts_request:
+    source: 'R:\APE_AE\TEMPLATES\Parts Request\PartsRequestSO-XXXXXXX.xlsx'
+    name: 'PartsRequest {ident}.xlsx'
+    folders: ['{project_folder}']
+    fill: {}

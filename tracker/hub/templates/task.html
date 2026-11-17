@@ -37,7 +37,7 @@
             <div class="task-title">{{ task.title }}{% if task.recur %}<span class="tag tag-recur" title="{{ task.recur }}">&#128257; {{ task.recur_label }}</span>{% endif %}</div>
             {{ macros.manual_actions(task) }}{{ macros.manual_edit(task) }}
           </div>
-          <div class="task-launch">{% if launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="" data-task-id="{{ task.id }}" title="{{ launch }}">&#9654; {{ launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
+          <div class="task-launch">{% if launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="" data-task-id="{{ task.id }}" title="{{ launch_title or launch }}">{% if launch_kind == "template" %}&#128196;{% else %}&#9654;{% endif %} {{ launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
           <div class="task-meta">
             <span class="nowrap">{{ task.due or "" }}{% if task.days is not none %}<span class="small muted"> ({{ task.days }}d)</span>{% endif %}</span>
             {{ macros.status_pill(task.status) }}

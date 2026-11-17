@@ -271,6 +271,60 @@ class TaskLaunchTests(unittest.TestCase):
             self.post("/api/task/launch_set", {"key": "0207000", "task_id": "", "target": ""}).status_code, 400
         )
 
+    def tool_app(self, tools: dict):
+        rules_path = self.root / "rules_tool.yaml"
+        rules_path.write_text(
+            yaml.safe_dump(
+                {
+                    "stages": ["Pre-Fabrication", "System Test", "Closeout", "Completion"],
+                    "workflow": [
+                        {
+                            "id": "p0207000-review_cpr_so",
+                            "stage": "Pre-Fabrication",
+                            "title": "Review CPR/SO",
+                            "launch": "tool:wire_diagram_builder",
+                        },
+                        {"id": "time_estimate", "stage": "Pre-Fabrication", "title": "Time estimate"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cfg = dict(self.cfg)
+        cfg["rules_path"] = str(rules_path)
+        cfg["tools"] = tools
+        self.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        app = create_app(self.config_path, port=8765, no_refresh=True, runner=lambda: 0)
+        app.testing = True
+        app.config["LAUNCHER"] = self.launched.append
+        return app
+
+    def tool_post(self, app, url: str, payload: dict):
+        headers = dict(HOST)
+        headers["X-Hub-Token"] = app.config["HUB_TOKEN"]
+        headers["Origin"] = ORIGIN
+        return app.test_client().post(url, json=payload, headers=headers)
+
+    def test_tool_launch_resolves_from_config(self):
+        app = self.tool_app({"wire_diagram_builder": str(self.exe)})
+        page = app.test_client().get("/p/0207000", headers=HOST).get_data(as_text=True)
+        self.assertIn("WireDiagramBuilder", page)
+        self.assertIn(str(self.exe), page)
+        response = self.tool_post(app, "/api/task/launch", {"key": "0207000", "task_id": "p0207000-review_cpr_so"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["launched"], str(self.exe))
+        self.assertEqual(self.launched, [str(self.exe)])
+
+    def test_unset_tool_has_no_launch_button(self):
+        app = self.tool_app({"wire_diagram_builder": ""})
+        page = app.test_client().get("/p/0207000", headers=HOST).get_data(as_text=True)
+        self.assertNotIn(
+            'data-action="task-launch" data-key="0207000" data-task-id="p0207000-review_cpr_so"', page
+        )
+        response = self.tool_post(app, "/api/task/launch", {"key": "0207000", "task_id": "p0207000-review_cpr_so"})
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.launched, [])
+
     def test_apply_update_keeps_task_launch(self):
         path = self.root / "keep.md"
         path.write_text(

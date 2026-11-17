@@ -2,6 +2,11 @@
 
 $root = $PSScriptRoot
 $pythonw = Join-Path $root ".venv\Scripts\pythonw.exe"
+if (-not (Test-Path $pythonw)) {
+    $found = Get-Command pythonw.exe -ErrorAction SilentlyContinue
+    if (-not $found) { throw "Run setup.cmd first: no .venv\Scripts\pythonw.exe and no pythonw.exe on PATH." }
+    $pythonw = $found.Source
+}
 $user = "$env:USERDOMAIN\$env:USERNAME"
 
 $action = New-ScheduledTaskAction -Execute $pythonw -Argument "-m tracker.hub" -WorkingDirectory $root
