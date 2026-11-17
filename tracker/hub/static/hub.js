@@ -932,6 +932,13 @@
       return parts.length ? parts[0] : "";
     };
     var ident = first(value("so")) || first(value("qte"));
+    if (form.getAttribute("data-layout") === "customer/so") {
+      var leaf = ident || value("project_no");
+      folder.placeholder = (value("customer") || leaf)
+        ? (value("customer") || "Unknown Customer") + "/" + (leaf || "Project")
+        : "auto: customer/SO";
+      return;
+    }
     var parts = [value("customer"), ident, value("project_no")].filter(function (part) { return part; });
     folder.placeholder = parts.length ? parts.join(" ") : "auto from customer / SO / project #";
   }

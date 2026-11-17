@@ -32,6 +32,8 @@ def out(text: str = "") -> None:
 
 
 def load_config(path: str | Path) -> dict:
+    if not Path(path).is_file():
+        raise SystemExit("Config not found: %s\nRun setup.cmd to create it." % path)
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh) or {}
     return settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
@@ -57,7 +59,7 @@ def task_prefix(project: Project) -> str:
 
 def create_project(cfg: dict, email: Email, parsed: dict, stage: str, dry_run: bool) -> Project | None:
     body_parsed = extract.parse_assignment_body(email.body_text)
-    entry = projects_mod.pending_entry(email, parsed, body_parsed)
+    entry = projects_mod.pending_entry(email, parsed, body_parsed, matcher.folder_layout(cfg))
     try:
         info = projects_mod.create_from_pending(cfg, entry, dry_run=dry_run)
     except ValueError as exc:
@@ -190,7 +192,7 @@ def collect_trigger_dates(
                 else:
                     parsed = matcher.parse_assignment_subject(email.subject)
                     body_parsed = extract.parse_assignment_body(email.body_text)
-                    entry = projects_mod.pending_entry(email, parsed, body_parsed)
+                    entry = projects_mod.pending_entry(email, parsed, body_parsed, matcher.folder_layout(cfg))
                     existing = pending.get(email.message_id)
                     if existing is None or existing.get("status") != "dismissed":
                         pending[email.message_id] = entry
@@ -624,7 +626,7 @@ def write_log(path: str | Path, lines: list[str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tracker", description="Local project deadline tracker")
     parser.add_argument("--dry-run", action="store_true", help="report changes without writing anything")
-    parser.add_argument("--since", type=int, default=120, help="only read emails newer than N days")
+    parser.add_argument("--since", type=int, default=None, help="only read emails newer than N days (default: outlook_com.days_back, else 120)")
     parser.add_argument("--config", default=str(HERE / "config.yaml"), help="path to config.yaml")
     parser.add_argument("--no-dashboard", action="store_true", help="skip dashboard.html")
     args = parser.parse_args(argv)
@@ -650,7 +652,9 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
     out("vault: %s" % cfg.get("vault"))
     out("today: %s" % today.isoformat())
 
-    projects = matcher.build_projects(cfg.get("vault") or "", cfg.get("exclude_folders") or [])
+    projects = matcher.build_projects(
+        cfg.get("vault") or "", cfg.get("exclude_folders") or [], matcher.folder_layout(cfg)
+    )
     index = matcher.build_index(projects)
     emails = collect_all(cfg, since_days=args.since)
     out("projects: %d, emails: %d" % (len(projects), len(emails)))
@@ -712,7 +716,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         entries = merge_block_state(tasks, body)
         computed_due.update(apply_due_overrides(tasks, entries, due_overrides, stored_state.get("computed_due") or {}))
         project.tasks = tasks
-        if not project.note_path:
+        if not project.note_path or (args.dry_run and not notes.lp(project.note_path).is_file()):
             if cfg.get("auto_create_projects", True):
                 out("  would create note for %s" % project.name)
             continue

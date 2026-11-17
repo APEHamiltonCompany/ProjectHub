@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Optional
 
 from ..models import Email
 from . import eml_folder, outlook_com
@@ -15,7 +15,9 @@ def dedupe(emails: Iterable[Email]) -> list[Email]:
     return list(seen.values())
 
 
-def collect_all(config: dict, since_days: int = 120) -> list[Email]:
+def collect_all(config: dict, since_days: Optional[int] = None) -> list[Email]:
+    if not since_days:
+        since_days = int((config.get("outlook_com") or {}).get("days_back") or 120)
     folders = list(config.get("eml_folders") or [])
     if config.get("scan_project_folders") and config.get("vault"):
         folders.append(config["vault"])

@@ -4,3 +4,4 @@ plotly
 tzlocal
 pywin32
 flask
+openpyxl

@@ -15,6 +15,9 @@ ASSIGNMENT_PREFIX_RE = re.compile(r"^\s*(?:(?:re|fw|fwd)\s*:\s*)*", re.I)
 ILLEGAL_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 ARCHIVE_DIR = "_Archive"
 TASKS_DIR = "My Tasks"
+LAYOUT_FLAT = "flat"
+LAYOUT_CUSTOMER = "customer/so"
+LAYOUTS = (LAYOUT_FLAT, LAYOUT_CUSTOMER)
 
 
 def is_reserved_dir(name: str) -> bool:
@@ -95,7 +98,7 @@ def select_note(folder: str | Path) -> Optional[str]:
     return str(max(md_files, key=lambda p: notes.lp(p).stat().st_mtime))
 
 
-def project_from_folder(folder: str | Path) -> Project:
+def project_from_folder(folder: str | Path, customer: str = "") -> Project:
     folder = Path(folder)
     name = folder.name
     note_path = select_note(folder)
@@ -126,25 +129,77 @@ def project_from_folder(folder: str | Path) -> Project:
     project.qte = sorted(keys["qte"])
     project.project_no = sorted(keys["project_no"])[0] if keys["project_no"] else ""
     if not project.customer:
-        project.customer = name.split("  ")[0].split(" SO-")[0].split(" QTE-")[0].strip()
+        project.customer = customer or name.split("  ")[0].split(" SO-")[0].split(" QTE-")[0].strip()
     return project
 
 
-def build_projects(vault: str | Path, exclude_folders: Iterable[str] = ()) -> list[Project]:
+def _subdirs(folder: Path, excluded: set[str]) -> list[Path]:
+    try:
+        entries = sorted(folder.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return []
+    return [
+        entry
+        for entry in entries
+        if entry.is_dir()
+        and not entry.name.startswith(".")
+        and entry.name.strip().lower() not in excluded
+        and not is_reserved_dir(entry.name)
+    ]
+
+
+def is_customer_dir(folder: Path) -> bool:
+    """A vault child is a customer folder when its own name has no SO/QTE/project number
+    but at least one of its subfolders does (the <vault>/<Customer>/SO-###### layout)."""
+    if has_keys(extract_keys(folder.name)):
+        return False
+    return any(has_keys(extract_keys(sub.name)) for sub in _subdirs(folder, set()))
+
+
+def project_dirs(
+    vault: str | Path, exclude_folders: Iterable[str] = (), layout: str = LAYOUT_FLAT
+) -> list[tuple[Path, str]]:
+    """(project folder, customer folder name or "") for flat and customer/SO layouts.
+
+    customer/so: a vault child whose name has an SO/QTE/project number is a (legacy flat)
+    project; every other child is a customer folder. Its subfolders are projects when their
+    name has an SO/QTE/project number or they hold a .md note (skips Logs, BACKUP, ...).
+    flat: children are projects unless they look like customer folders (is_customer_dir)."""
     vault = Path(vault)
     excluded = {name.strip().lower() for name in exclude_folders or []}
-    projects = []
     if not vault.is_dir():
-        return projects
-    for entry in sorted(vault.iterdir(), key=lambda p: p.name.lower()):
-        if not entry.is_dir():
-            continue
-        if entry.name.startswith(".") or entry.name.strip().lower() in excluded:
-            continue
-        if is_reserved_dir(entry.name):
-            continue
-        projects.append(project_from_folder(entry))
-    return projects
+        return []
+    rows: list[tuple[Path, str]] = []
+    for entry in _subdirs(vault, excluded):
+        if layout == LAYOUT_CUSTOMER:
+            customer = not has_keys(extract_keys(entry.name))
+        else:
+            customer = is_customer_dir(entry)
+        if customer:
+            rows.extend(
+                (sub, entry.name)
+                for sub in _subdirs(entry, excluded)
+                if layout != LAYOUT_CUSTOMER or has_keys(extract_keys(sub.name)) or select_note(sub)
+            )
+        else:
+            rows.append((entry, ""))
+    return rows
+
+
+def relative_folder(vault: str | Path, folder: str | Path) -> str:
+    try:
+        return Path(folder).relative_to(Path(vault)).as_posix()
+    except ValueError:
+        return Path(folder).name
+
+
+def build_projects(
+    vault: str | Path, exclude_folders: Iterable[str] = (), layout: str = LAYOUT_FLAT
+) -> list[Project]:
+    return [
+        project_from_folder(folder, customer)
+        for folder, customer in project_dirs(vault, exclude_folders, layout)
+    ]
 
 
 def build_index(projects: Iterable[Project]) -> dict[str, dict[str, Project]]:
@@ -176,7 +231,25 @@ def match_email(email: Email, index: dict[str, dict[str, Project]]) -> tuple[Opt
     return None, keys
 
 
-def folder_name_for(customer: str, so: list[str], qte: list[str], project_no: str) -> str:
+def folder_layout(cfg: dict) -> str:
+    value = str((cfg or {}).get("project_folder_layout") or LAYOUT_FLAT).strip().lower()
+    return value if value in LAYOUTS else LAYOUT_FLAT
+
+
+def folder_name_for(
+    customer: str, so: list[str], qte: list[str], project_no: str, layout: str = LAYOUT_FLAT
+) -> str:
     ident = so[0] if so else (qte[0] if qte else "")
+    if layout == LAYOUT_CUSTOMER:
+        leaf = sanitize_name(ident or project_no or "Project")
+        return sanitize_name(customer or "Unknown Customer") + "/" + leaf
     parts = [customer, ident, project_no]
     return sanitize_name(" ".join(p for p in parts if p))
+
+
+def split_folder(raw: str) -> list[str]:
+    """Split a vault-relative project folder ("Name" or "Customer/Name"); [] if invalid."""
+    parts = [p.strip() for p in re.split(r"[\\/]", str(raw or ""))]
+    if not 1 <= len(parts) <= 2 or any(p in ("", ".", "..") for p in parts):
+        return []
+    return [sanitize_name(p) for p in parts]

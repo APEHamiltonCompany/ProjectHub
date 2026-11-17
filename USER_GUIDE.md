@@ -13,56 +13,54 @@ Ground rules built into the system:
 ## Part 1: One-time setup
 
 ### 1.1 Prerequisites
-1. **Python 3.12** at `C:\Users\Anthony.Zunino\AppData\Local\Programs\Python\Python312\` (already installed).
+1. **Windows** with **Python 3.12** (3.13/3.14 also work; `setup.cmd` tries to install 3.12 if none is found).
 2. **Classic Outlook** (OUTLOOK.EXE), not "New Outlook". The tracker reads the Inbox and Calendar through classic Outlook. Keep it signed in. If it's closed when the tracker runs, the tracker tries to start it in the background.
 3. **Google Chrome**, for the tab-group extension (optional).
-4. The project folder root (the "vault"):
-   `C:\Users\Anthony.Zunino\OneDrive - Hamilton Company\Desktop\Projects\Project Specific Documents`
-5. The time-estimate template:
-   `C:\Users\Anthony.Zunino\OneDrive - Hamilton Company\Desktop\Projects\templates\TimeEstimates.xlsx`
+4. Your project folder root (the "vault"). With `project_folder_layout: customer/so` (the default) projects live in `<vault>\<Customer>\SO-######`; with `flat` they are `<vault>\<Customer> SO-###### <project #>`. See 1.6a.
+5. Optional: the `TimeEstimates.xlsx` template, and access to the APE Project Tracking workbook.
 
-### 1.2 Install the Python packages
-Open a terminal in `C:\repos\Projects\ProjectHub` and run:
-```bash
-python -m pip install --user -r requirements.txt
-```
+### 1.2 Run the setup wizard
+Double-click `setup.cmd` in the repo folder. It creates a `.venv` with the right Python packages, then opens the setup wizard, which:
+- asks for your name, initials, project folder, personal tasks file, time-estimate template, email sources and APE sheet location (with Browse buttons), plus optional advanced settings (holidays, hub port, refresh interval...);
+- checks that the paths exist and writes your own `tracker\config.yaml` (gitignored; `tracker\config.example.yaml` documents every setting);
+- **Save and test run** does a dry run of the tracker and shows the output;
+- **Register scheduled tasks** sets up the hub at logon and/or the weekday 06:30 tracker run.
 
-### 1.3 Check the configuration
-Open `tracker\config.yaml` and check:
-- `vault`: the project folder root above.
-- `me.name`: your name as it appears in PM schedules ("Anthony Zunino"). Rows assigned to you in a kickoff schedule are always tracked.
-- `holidays`: company holidays. Deadlines are counted in business days and skip these dates.
-- `time_estimate_template`: path to `TimeEstimates.xlsx`.
-- `auto_create_projects: false`: new assignments wait in the hub for you to click **Create project**.
-- `hub.port` (8765), `hub.refresh_minutes` (15), `hub.toast` (true = Windows notification for new assignments).
+Run `setup.cmd` again any time to change settings. The previous config is kept as `tracker\config.yaml.bak`.
 
-### 1.4 Do a test run
+### 1.3 Manual commands
+From the repo folder:
 ```bash
-python -m tracker.tracker --dry-run
+.venv\Scripts\python -m tracker.tracker --dry-run
+.venv\Scripts\python -m tracker.tracker
+.venv\Scripts\python -m tracker.hub
 ```
-This prints what would change and writes nothing. If it looks right, do a real run:
-```bash
-python -m tracker.tracker
-```
+`--dry-run` prints what would change and writes nothing. `--since N` overrides `outlook_com.days_back` for one run.
+
+### 1.4 Hub settings page
+The hub's **Settings** page can change the vault, personal tasks file, template and APE sheet path later. Those are saved in `tracker\settings.json` and take priority over `config.yaml`; the setup wizard clears them when you save, so the wizard's values apply.
 
 ### 1.5 Start the hub automatically at login
-Run this once in PowerShell:
-```bash
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\repos\Projects\ProjectHub\install_hub_startup.ps1"
-```
-This registers the scheduled task **ProjectHub**. It starts the hub hidden (pythonw) each time you log in, and the hub re-reads Outlook every 15 minutes. To start it right away without logging out:
+Use **Register scheduled tasks** in the wizard, or run `install_hub_startup.ps1` in PowerShell. This registers the scheduled task **ProjectHub**, which starts the hub hidden (pythonw) each time you log in. To start it right away without logging out:
 ```bash
 powershell.exe -NoProfile -Command "Start-ScheduledTask -TaskName ProjectHub"
 ```
-To run the hub in a visible window instead (for troubleshooting), double-click `run_hub.cmd`. Stop the scheduled copy first, because only one copy can use port 8765.
+To run the hub in a visible window instead (for troubleshooting), double-click `run_hub.cmd`. Stop the scheduled copy first, because only one copy can use the hub port.
 
-### 1.6 The early-morning tracker run (already installed)
-The scheduled task **ProjectTracker** runs the tracker on weekdays at 06:30, so the dashboard is fresh before the Monday 7 AM review even if the hub isn't running. It was registered with `install_schedule.ps1`. It and the hub share a lock file, so they never write at the same time.
+### 1.6a Project folder layout
+`project_folder_layout` in `config.yaml` (also in the setup wizard) controls where new project folders go:
+- `customer/so` (default): `<vault>\Medimmune\SO-295546`. The customer folder is created if needed, and an existing one is reused even if its capitalisation differs. Without an SO the folder is named after the QTE, then the project number. The note inside is `SO-295546.md`; the project number, customer and so on stay in its frontmatter.
+- `flat`: `<vault>\Medimmune SO-295546 0207846` (the original behaviour).
+
+When reading the vault in the `customer/so` layout, a top-level folder whose name has an SO, QTE or project number is treated as an older flat project. Every other top-level folder is a customer folder. Inside a customer folder, only subfolders whose name has an SO, QTE or project number, or that already hold a `.md` note, count as projects, so folders like `Logs` or `BACKUP` are ignored. `exclude_folders` applies at both levels.
+
+### 1.6 The early-morning tracker run
+The scheduled task **ProjectTracker** runs the tracker on weekdays at 06:30, so the dashboard is fresh before the Monday 7 AM review even if the hub isn't running. Register it with the wizard or `install_schedule.ps1`. It and the hub share a lock file, so they never write at the same time.
 
 ### 1.7 Install the Chrome extension (optional, recommended)
 1. In Chrome, open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
-3. Click **Load unpacked** and choose `C:\repos\Projects\ProjectHub\chrome_extension`.
+3. Click **Load unpacked** and choose `C:\repos\ProjectHub\chrome_extension`.
 4. Bookmark `http://localhost:8765`.
 
 The extension is version 2.0.0. After updating it, click **Reload** on **Project Hub Tab Groups** in `chrome://extensions`; it re-attaches to the hub tabs you already have open. If it doesn't, press F5 on the hub page.
@@ -246,10 +244,10 @@ Open **Settings** in the sidebar, or `http://localhost:8765/settings`. Everythin
 
 ### 2.8 Projects page (archive, delete, restore)
 Open **Projects** in the sidebar, or `http://localhost:8765/projects`. It lists every project the hub has indexed, with its customer, SO/QTE, stage, open task count, last email date and folder path.
-- **Create project manually** (top of the page) makes a project without waiting for an email. Fill in Customer (required), SO numbers, QTE numbers, Project # (7 digits, optional), Description, Level and Folder name; separate several SO or QTE numbers with commas or spaces. Leave Folder name blank and the hub names the folder from the customer, the first SO (or QTE) and the project number. It creates the folder, the note and the time-estimate sheet from the template, then opens the project page. Add links (SharePoint, email, etc.) on the project page afterwards.
+- **Create project manually** (top of the page) makes a project without waiting for an email. Fill in Customer (required), SO numbers, QTE numbers, Project # (7 digits, optional), Description, Level and Folder name; separate several SO or QTE numbers with commas or spaces. Leave Folder name blank and the hub names the folder from the customer and the first SO (or QTE, or the project number): `Customer/SO-######` in the `customer/so` layout, `Customer SO-###### <project #>` in the `flat` layout. You can type either form. It creates the folder, the note and the time-estimate sheet from the template, then opens the project page. Add links (SharePoint, email, etc.) on the project page afterwards.
 - **Open folder** opens the project folder in Explorer.
-- **Archive** moves the folder into `_Archive` inside the vault. Archived projects drop out of the board, the timeline and the project list. The **Archived** section lists them with **Restore** (moves the folder back) and **Open folder**.
-- **Delete** asks a simple OK/Cancel confirm. The folder is then moved to `backups\deleted_projects\<YYYYmmdd_HHMMSS>_<folder name>`, never erased. Its saved links are removed and any pending assignment for it is marked deleted. The **Deleted** section lists these backups newest first, with **Restore** (moves the folder back under its original name) and **Open folder**.
+- **Archive** moves the folder into `_Archive` inside the vault, keeping the customer level (`_Archive\<Customer>\SO-######`); an emptied customer folder is removed. Archived projects drop out of the board, the timeline and the project list. The **Archived** section lists them with **Restore** (moves the folder back) and **Open folder**.
+- **Delete** asks a simple OK/Cancel confirm. The folder is then moved to `backups\deleted_projects\<YYYYmmdd_HHMMSS>_<folder name>`, never erased. Its saved links are removed and any pending assignment for it is marked deleted. Nested projects are backed up as `<stamp>_<Customer> - SO-######`. The **Deleted** section lists these backups newest first, with **Restore** (moves the folder back to its original place, recreating the customer folder if needed) and **Open folder**.
 - If a file in the folder is open (Excel, Word, a PDF viewer), Windows can refuse the move. Close it and try again; the hub says "Could not move the folder (is a file open?)".
 - Restore never overwrites: if a folder with that name is already in the vault, you get a message instead.
 - Buttons that start work (**Refresh now**, Create, Link, Simulate, Archive, Delete, Restore, Open as tab group) show a small spinner and are disabled until the work finishes.
@@ -258,7 +256,7 @@ Open **Projects** in the sidebar, or `http://localhost:8765/projects`. It lists 
 You don't need an email to try it:
 1. Open **Projects** and click **Simulate new assignment** under "Test the new-assignment workflow". The hub adds a fake assignment (customer `TEST Customer`, a `QTE-9xxxxx` number and a `0299xxx` project number that don't collide with anything you have) and takes you to the Dashboard.
 2. The banner shows it with a **TEST** badge. **Create project**, **Link to existing folder** and **Dismiss** work exactly as they do for a real assignment.
-3. **Create project** makes a real folder named `TEST Customer QTE-9xxxxx 0299xxx` in the vault, then opens its project page once the refresh finishes.
+3. **Create project** makes a real folder named `TEST Customer\QTE-9xxxxx` (or `TEST Customer QTE-9xxxxx 0299xxx` in the flat layout) in the vault, then opens its project page once the refresh finishes.
 4. Delete it from **Projects** when you're done (see 2.8).
 
 ### 2.10 Team tracker sheet (read-only)
@@ -316,7 +314,7 @@ Ticks made outside the hub (typed directly in the `.md`) show up in the note but
 
 ## Part 4: Customising
 
-- **Workflow steps and offsets**: `tracker\rules.yaml`. `triggers` holds the subject patterns for each email type. `workflow` holds each step, its stage and its offset in business days from a trigger. After editing, run `python -m tracker.tracker --dry-run` to check.
+- **Workflow steps and offsets**: `tracker\rules.yaml`. `triggers` holds the subject patterns for each email type. `workflow` holds each step, its stage and its offset in business days from a trigger. After editing, run `.venv\Scripts\python -m tracker.tracker --dry-run` to check.
 - **Note template**: `templates\Project Template.md`, used when **Create project** makes a new note.
 - **PM schedule rows to keep**: `pm_schedule_include` in `tracker\config.yaml`, a regular expression on the row name.
 - **How far back emails are read**: `outlook_com.days_back` in `config.yaml`, or `--since N` on the command line.
@@ -351,13 +349,13 @@ Logs: `output\last_run.log` (tracker runs), `output\hub_last_run.log` (latest hu
 ---
 
 ## Part 7: Command reference
-Run from `C:\repos\Projects\ProjectHub`:
+Run from `C:\repos\ProjectHub`:
 ```bash
-python -m tracker.tracker --dry-run      # preview, writes nothing
-python -m tracker.tracker                # normal run
-python -m tracker.tracker --since 30     # only emails from the last 30 days
-python -m tracker.hub                    # run the hub in this window
-python -m unittest discover -s tests     # self-tests
+.venv\Scripts\python -m tracker.tracker --dry-run      # preview, writes nothing
+.venv\Scripts\python -m tracker.tracker                # normal run
+.venv\Scripts\python -m tracker.tracker --since 30     # only emails from the last 30 days
+.venv\Scripts\python -m tracker.hub                    # run the hub in this window
+.venv\Scripts\python -m unittest discover -s tests     # self-tests
 ```
 
 ---
@@ -367,7 +365,7 @@ python -m unittest discover -s tests     # self-tests
 powershell.exe -NoProfile -Command "Unregister-ScheduledTask -TaskName ProjectHub -Confirm:$false"
 powershell.exe -NoProfile -Command "Unregister-ScheduledTask -TaskName ProjectTracker -Confirm:$false"
 ```
-Then remove the extension at `chrome://extensions` and delete `C:\repos\Projects\ProjectHub` if you no longer want it. Your project notes and folders stay in OneDrive. The tracker sections in the notes are plain Markdown and can stay or be deleted.
+Then remove the extension at `chrome://extensions` and delete `C:\repos\ProjectHub` if you no longer want it. Your project notes and folders stay in OneDrive. The tracker sections in the notes are plain Markdown and can stay or be deleted.
 
 ---
 

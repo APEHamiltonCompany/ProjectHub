@@ -237,7 +237,8 @@ class TimeAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         text = notes.read_text(self.note)[0]
         self.assertIn(
-            "- [ ] Review CPR/SO \u23f1 1.5h [days:: 2026-11-12] \U0001f4c5 2026-11-02 \U0001f194 p0207000-review_cpr_so",
+            "- [ ] Review CPR/SO \u23f1 1.5h [days:: %s] \U0001f4c5 2026-11-02 \U0001f194 p0207000-review_cpr_so"
+            % date.today().isoformat(),
             text,
         )
         self.assertIn("<!-- tracker:end -->", text)

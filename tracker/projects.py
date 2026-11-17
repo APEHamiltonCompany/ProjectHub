@@ -35,7 +35,31 @@ def render_note(template: str, values: dict, checklist: list[str] | None = None)
     return text
 
 
-def pending_entry(email: Email, parsed: dict, body_parsed: dict) -> dict:
+def suggested_folder(cfg: dict, pending: dict) -> str:
+    parsed = pending.get("parsed") or {}
+    if not any(parsed.get(key) for key in ("customer", "so", "qte", "project_no")):
+        return str(pending.get("suggested_folder") or "")
+    return matcher.folder_name_for(
+        parsed.get("customer", ""),
+        list(parsed.get("so") or []),
+        list(parsed.get("qte") or []),
+        parsed.get("project_no", ""),
+        matcher.folder_layout(cfg),
+    )
+
+
+def _existing_child(parent: Path, name: str) -> Path:
+    """parent/name, reusing an existing folder whose name differs only in case."""
+    try:
+        for entry in notes.lp(parent).iterdir():
+            if entry.is_dir() and entry.name.lower() == name.lower():
+                return parent / entry.name
+    except OSError:
+        pass
+    return parent / name
+
+
+def pending_entry(email: Email, parsed: dict, body_parsed: dict, layout: str = matcher.LAYOUT_FLAT) -> dict:
     return {
         "message_id": email.message_id,
         "subject": email.subject,
@@ -56,6 +80,7 @@ def pending_entry(email: Email, parsed: dict, body_parsed: dict) -> dict:
             list(parsed.get("so") or []),
             list(parsed.get("qte") or []),
             parsed.get("project_no", ""),
+            layout,
         ),
         "status": "new",
     }
@@ -117,11 +142,13 @@ def create_from_pending(
     dry_run: bool = False,
 ) -> dict:
     vault = Path(cfg.get("vault") or "")
-    raw = folder_name or pending.get("suggested_folder") or ""
-    if not raw.strip() or ".." in raw or "/" in raw or "\\" in raw:
+    raw = folder_name or suggested_folder(cfg, pending)
+    parts = matcher.split_folder(raw)
+    if not parts:
         raise ValueError("invalid folder name: %r" % raw)
-    name = matcher.sanitize_name(raw)
-    folder = vault / name
+    name = parts[-1]
+    parent = _existing_child(vault, parts[0]) if len(parts) == 2 else vault
+    folder = parent / name
     if not _inside(vault, folder):
         raise ValueError("folder resolves outside the vault: %s" % folder)
     if notes.lp(folder).exists():

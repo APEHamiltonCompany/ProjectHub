@@ -211,11 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         target = backup_vault(vault, backup_root)
         out("backup: %s" % target)
 
-    excluded = {name.strip().lower() for name in cfg.get("exclude_folders") or []}
     changed = 0
-    for folder in sorted(vault.iterdir(), key=lambda p: p.name.lower()):
-        if not folder.is_dir() or folder.name.strip().lower() in excluded:
-            continue
+    for folder, _customer in matcher.project_dirs(vault, cfg.get("exclude_folders") or [], matcher.folder_layout(cfg)):
         note_path = matcher.select_note(folder)
         if note_path is None:
             messages = create_missing_note(folder, cfg, args.dry_run)

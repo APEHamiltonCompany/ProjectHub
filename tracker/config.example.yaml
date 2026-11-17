@@ -1,0 +1,92 @@
+# ProjectHub configuration template.
+# Run setup.cmd (the setup wizard) to create your own tracker/config.yaml from this file.
+# tracker/config.yaml is per-user and gitignored; edit this template only to change the defaults for everyone.
+
+# --- Inputs you provide -------------------------------------------------------
+
+# Folder whose direct subfolders are your projects (one folder per project, with a .md note inside).
+vault: "C:/Users/YOUR.NAME/OneDrive - Hamilton Company/Desktop/Projects/Project Specific Documents"
+# Markdown file for non-project tasks. Created automatically on first use. Default: <vault>/My Tasks.md
+personal_tasks_path: "C:/Users/YOUR.NAME/OneDrive - Hamilton Company/Desktop/Projects/Project Specific Documents/My Tasks.md"
+# How new project folders are named inside the vault:
+#   customer/so  ->  <vault>/<Customer>/SO-######   (QTE-###### or the project number if there is no SO)
+#   flat         ->  <vault>/<Customer> SO-###### <project number>
+# Both layouts are always recognised when reading the vault, so existing folders keep working.
+project_folder_layout: customer/so
+# Vault subfolders that are not projects.
+exclude_folders:
+  - General
+# Folders searched (recursively) for saved .eml/.msg emails. Missing folders are skipped.
+eml_folders:
+  - "C:/repos/ProjectHub/email_drop"
+# Also search the vault project folders for saved emails.
+scan_project_folders: true
+# Classic Outlook (not "New Outlook") access, read-only.
+outlook_com:
+  enabled: true
+  folders:
+    - Inbox
+  calendar: true
+  # How many days of email/calendar history to read (--since N on the command line overrides it).
+  days_back: 60
+me:
+  # Your name exactly as it appears in PM kickoff schedules.
+  name: Your Name
+  # Not currently used by the code.
+  email: your.name@hamiltoncompany.com
+# Company holidays; skipped when counting business-day deadlines.
+holidays:
+  - 2026-11-26
+  - 2026-11-27
+  - 2026-12-24
+  - 2026-12-25
+  - 2026-12-31
+  - 2027-01-01
+  - 2027-05-31
+  - 2027-07-05
+  - 2027-09-06
+# true: new assignment emails create project folders automatically. false: they wait in the hub for "Create project".
+auto_create_projects: false
+# Days ahead that count as "due soon" in the tracker summary.
+due_soon_days: 3
+# Regex of extra PM schedule rows to track besides the ones assigned to you.
+pm_schedule_include: '(?i)test plan|parts for testing|prefab ?apps|apps|demo|fat|need-by|ship|close ?out'
+# Excel file copied into each new project folder as <date>_TimeEstimates.xlsx. Skipped if missing.
+time_estimate_template: "C:/Users/YOUR.NAME/OneDrive - Hamilton Company/Desktop/Projects/templates/TimeEstimates.xlsx"
+
+# --- Program output (created automatically; defaults are inside this repo) -----
+# snapshot_path: output/snapshot.json
+# dashboard.output: output/dashboard.html
+# state_path: tracker/state.json
+# log_path: output/last_run.log
+# backup_root: backups
+# templates_dir: templates
+dashboard:
+  plotly_js: cdn
+# Not currently used by the code.
+timezone: local
+hub:
+  port: 8765
+  refresh_minutes: 15
+  # Windows notification for new assignments.
+  toast: true
+# Not currently used by the code.
+ai:
+  enabled: false
+# Copy templates/Dashboard.md into the vault root (for Obsidian users).
+install_dashboard_note: false
+
+# --- APE Project Tracking workbook (read-only) ---------------------------------
+ape_sheet:
+  enabled: true
+  # Fallback folder searched for the workbook (e.g. where you download it).
+  path: "C:/Users/YOUR.NAME/Downloads"
+  pattern: "APE Project Tracking*.xlsx"
+  # Look for a OneDrive-synced copy named sync_filename first.
+  auto_find: true
+  sync_filename: "APE Project Tracking.xlsx"
+  # Your initials as used in the sheet's assignment columns.
+  my_initials: XX
+  # Hours after which a downloaded copy is flagged as stale.
+  stale_hours: 48
+  url: "https://hamiltonmarketing.sharepoint.com/:x:/s/RNOAPE/IQDm4sasM7CTR6tIlW4RZwudAQ5vAffff0kaw_GEz2RITfA?e=Jraqhi"

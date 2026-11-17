@@ -7,7 +7,7 @@ Chrome extension that turns a Project Hub project page into a Chrome tab group, 
 1. Open `chrome://extensions` in Chrome.
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked**.
-4. Select this folder (`C:\repos\Projects\ProjectHub\chrome_extension`).
+4. Select this folder (`C:\repos\ProjectHub\chrome_extension`).
 
 ## Use it
 

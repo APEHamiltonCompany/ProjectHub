@@ -52,10 +52,13 @@ CHECK_GLYPHS = {" ": "\u2610", "x": "\u2611", "-": "\u2298"}
 NEXT_MARK = {" ": "x", "x": "-", "-": " "}
 LAYOUTS = ("board", "timeline", "focus")
 ZOOMS = (100, 90, 80, 75, 70, 60, 50)
+ORIGIN_FILE = ".projecthub_origin"
 DEFAULT_STAGES = ["Pre-Kickoff", "Pre-Fabrication", "System Test", "Closeout", "Completion"]
 
 
 def _load_config(path: str | Path) -> dict:
+    if not Path(path).is_file():
+        raise SystemExit("Config not found: %s\nRun setup.cmd to create it." % path)
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh) or {}
     return settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
@@ -681,45 +684,36 @@ def create_app(
                 out.append({"title": link.get("title") or url, "url": url, "user": True})
         return out
 
+    def rel_folder(folder: str | Path) -> str:
+        return matcher.relative_folder(live["vault"], folder)
+
     def folder_choices() -> list[str]:
-        names = [Path(project.get("folder") or "").name for project in snapshot().get("projects") or []]
-        excluded = {str(name).strip().lower() for name in cfg.get("exclude_folders") or []}
-        try:
-            for entry in sorted(live["vault"].iterdir(), key=lambda p: p.name.lower()):
-                if not entry.is_dir() or entry.name.startswith("."):
-                    continue
-                if entry.name.strip().lower() in excluded:
-                    continue
-                if matcher.is_reserved_dir(entry.name):
-                    continue
-                names.append(entry.name)
-        except OSError:
-            pass
+        names = [
+            rel_folder(project.get("folder"))
+            for project in snapshot().get("projects") or []
+            if project.get("folder")
+        ]
+        names.extend(rel_folder(folder) for folder in vault_dirs())
         return sorted({name for name in names if name}, key=str.lower)
 
     def vault_dirs() -> list[Path]:
-        excluded = {str(name).strip().lower() for name in cfg.get("exclude_folders") or []}
-        try:
-            entries = sorted(live["vault"].iterdir(), key=lambda p: p.name.lower())
-        except OSError:
-            return []
-        rows = []
-        for entry in entries:
-            if not entry.is_dir() or entry.name.startswith("."):
-                continue
-            if entry.name.strip().lower() in excluded:
-                continue
-            if matcher.is_reserved_dir(entry.name):
-                continue
-            rows.append(entry)
-        return rows
+        return [
+            folder
+            for folder, _customer in matcher.project_dirs(
+                live["vault"], cfg.get("exclude_folders") or [], matcher.folder_layout(cfg)
+            )
+        ]
 
     def vault_folder_for(entry: dict) -> str:
         parsed = entry.get("parsed") or {}
         wanted = {str(value) for value in [parsed.get("project_no")] + list(parsed.get("so") or []) + list(parsed.get("qte") or []) if value}
-        suggested = str(entry.get("suggested_folder") or "").strip().lower()
+        suggested = {
+            str(name).strip().lower()
+            for name in (entry.get("suggested_folder"), projects_mod.suggested_folder(cfg, entry))
+            if name
+        }
         for folder in vault_dirs():
-            if suggested and folder.name.strip().lower() == suggested:
+            if rel_folder(folder).lower() in suggested:
                 return str(folder)
             if _key_for_folder(folder.name) in wanted:
                 return str(folder)
@@ -734,7 +728,7 @@ def create_app(
     def pending_new() -> list[dict]:
         state = state_mod.load(state_path)
         rows = [
-            dict(entry)
+            dict(entry, suggested_folder=projects_mod.suggested_folder(cfg, entry))
             for entry in (state.get("pending") or {}).values()
             if (entry.get("status") or "new") == "new"
         ]
@@ -759,9 +753,31 @@ def create_app(
             return False
         return Path(text).name == text
 
-    def move_folder(source: Path, target: Path) -> None:
+    def project_rel(name: str) -> bool:
+        """A vault-relative project folder: "Name" or "Customer/Name"."""
+        text = str(name or "")
+        parts = text.replace("\\", "/").split("/")
+        return 1 <= len(parts) <= 2 and all(direct_child(part) for part in parts)
+
+    def move_folder(source: Path, target: Path, stop: Path | None = None) -> None:
         notes.lp(target.parent).mkdir(parents=True, exist_ok=True)
         shutil.move(str(notes.lp(source)), str(notes.lp(target)))
+        parent = source.parent
+        if stop is not None and parent != stop and projects_mod._inside(stop, parent):
+            try:
+                notes.lp(parent).rmdir()
+            except OSError:
+                pass
+
+    def archived_names() -> list[str]:
+        base = live["vault"] / matcher.ARCHIVE_DIR
+        return sorted(
+            (
+                matcher.relative_folder(base, folder)
+                for folder, _customer in matcher.project_dirs(base, (), matcher.folder_layout(cfg))
+            ),
+            key=str.lower,
+        )
 
     def ui_prefs() -> dict:
         return _ui_prefs(state_mod.load(state_path).get("ui") or {})
@@ -1451,15 +1467,7 @@ def create_app(
                     "folder": project.get("folder") or "",
                 }
             )
-        archived = []
-        try:
-            for entry in sorted(
-                (live["vault"] / matcher.ARCHIVE_DIR).iterdir(), key=lambda p: p.name.lower()
-            ):
-                if entry.is_dir() and not entry.name.startswith("."):
-                    archived.append(entry.name)
-        except OSError:
-            pass
+        archived = archived_names()
         deleted = []
         try:
             for entry in sorted(deleted_root().iterdir(), key=lambda p: p.name, reverse=True):
@@ -1474,6 +1482,7 @@ def create_app(
             deleted=deleted,
             pending=pending_new(),
             backup_root=str(backup_root()),
+            folder_layout=matcher.folder_layout(cfg),
             layout=current_layout(),
         )
 
@@ -1759,7 +1768,7 @@ def create_app(
             "sharepoint": "",
             "team": [str(me.get("name"))] if me.get("name") else [],
             "checklist": [],
-            "suggested_folder": matcher.folder_name_for(customer, so, qte, project_no),
+            "suggested_folder": matcher.folder_name_for(customer, so, qte, project_no, matcher.folder_layout(cfg)),
             "status": "new",
         }
         with mutex:
@@ -1850,14 +1859,16 @@ def create_app(
         def apply(state: dict) -> dict:
             pending = state.setdefault("pending", {})
             taken = {str(entry.get("suggested_folder") or "").strip().lower() for entry in pending.values()}
-            taken |= {folder.name.strip().lower() for folder in vault_dirs()}
+            taken |= {rel_folder(folder).strip().lower() for folder in vault_dirs()}
             folder = ""
             project_no = ""
             qte = ""
             for _attempt in range(50):
                 project_no = "0299%03d" % secrets.randbelow(1000)
                 qte = "QTE-9%05d" % secrets.randbelow(100000)
-                folder = matcher.folder_name_for("TEST Customer", [], [qte], project_no)
+                folder = matcher.folder_name_for(
+                    "TEST Customer", [], [qte], project_no, matcher.folder_layout(cfg)
+                )
                 if folder.strip().lower() not in taken:
                     break
             else:
@@ -2140,11 +2151,11 @@ def create_app(
             return jsonify({"error": error}), 404
         if folder is None:
             return jsonify({"error": error}), 400
-        target = live["vault"] / matcher.ARCHIVE_DIR / folder.name
+        target = live["vault"] / matcher.ARCHIVE_DIR / rel_folder(folder)
         if notes.lp(target).exists():
-            return jsonify({"error": "already archived: %s" % target.name}), 409
+            return jsonify({"error": "already archived: %s" % rel_folder(folder)}), 409
         try:
-            move_folder(folder, target)
+            move_folder(folder, target, stop=live["vault"])
         except OSError as exc:
             return jsonify({"error": "Could not move the folder (is a file open?): %s" % exc}), 500
         start_run()
@@ -2162,18 +2173,25 @@ def create_app(
         if str(payload.get("confirm") or "") != key:
             return jsonify({"error": "confirm must match the project key"}), 400
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        target = deleted_root() / ("%s_%s" % (stamp, folder.name))
+        relative = rel_folder(folder)
+        target = deleted_root() / ("%s_%s" % (stamp, relative.replace("/", " - ")))
         try:
-            move_folder(folder, target)
+            move_folder(folder, target, stop=live["vault"])
         except OSError as exc:
             return jsonify({"error": "Could not move the folder (is a file open?): %s" % exc}), 500
+        if relative != folder.name:
+            try:
+                notes.lp(target / ORIGIN_FILE).write_text(relative, encoding="utf-8")
+            except OSError:
+                pass
 
         def apply(state: dict) -> None:
             links = state.get("user_links") or {}
             links.pop(key, None)
             state["user_links"] = links
             for entry in (state.get("pending") or {}).values():
-                if str(entry.get("suggested_folder") or "") == folder.name:
+                names = {str(entry.get("suggested_folder") or ""), projects_mod.suggested_folder(cfg, entry)}
+                if names & {relative, folder.name}:
                     entry["status"] = "deleted"
 
         mutate_state(apply)
@@ -2184,7 +2202,7 @@ def create_app(
     def api_projects_restore():
         payload = request.get_json(silent=True) or {}
         name = str(payload.get("name") or "")
-        if not direct_child(name):
+        if not project_rel(name):
             return jsonify({"error": "bad folder name"}), 400
         source = live["vault"] / matcher.ARCHIVE_DIR / name
         if not notes.lp(source).is_dir():
@@ -2193,7 +2211,7 @@ def create_app(
         if notes.lp(target).exists():
             return jsonify({"error": "a folder with that name already exists"}), 409
         try:
-            move_folder(source, target)
+            move_folder(source, target, stop=live["vault"] / matcher.ARCHIVE_DIR)
         except OSError as exc:
             return jsonify({"error": "Could not move the folder (is a file open?): %s" % exc}), 500
         start_run()
@@ -2209,13 +2227,19 @@ def create_app(
         if not notes.lp(source).is_dir():
             return jsonify({"error": "not in the deleted backup: %s" % name}), 404
         original = name[16:] if re.match(r"^\d{8}_\d{6}_", name) else name
-        if not direct_child(original):
+        origin = notes.lp(source / ORIGIN_FILE)
+        try:
+            original = origin.read_text(encoding="utf-8").strip() or original
+        except OSError:
+            pass
+        if not project_rel(original):
             return jsonify({"error": "bad folder name"}), 400
         target = live["vault"] / original
         if notes.lp(target).exists():
             return jsonify({"error": "a folder with that name already exists"}), 409
         try:
             move_folder(source, target)
+            notes.lp(target / ORIGIN_FILE).unlink(missing_ok=True)
         except OSError as exc:
             return jsonify({"error": "Could not move the folder (is a file open?): %s" % exc}), 500
         start_run()
@@ -2226,7 +2250,7 @@ def create_app(
         payload = request.get_json(silent=True) or {}
         where = str(payload.get("where") or "")
         name = str(payload.get("name") or "")
-        if not direct_child(name):
+        if not (project_rel(name) if where == "archive" else direct_child(name)):
             return jsonify({"error": "bad folder name"}), 400
         if where == "archive":
             base = live["vault"] / matcher.ARCHIVE_DIR

@@ -452,9 +452,10 @@ class HubAppTests(unittest.TestCase):
         self.assertEqual(state["pending"]["msg-1"]["status"], "dismissed")
 
     def test_add_project_task(self):
+        due = (date.today() + timedelta(days=60)).isoformat()
         response = self.post(
             "/api/tasks/add",
-            {"key": "0207000", "description": "Buy parts", "due": "2026-11-20", "notes": "waiting"},
+            {"key": "0207000", "description": "Buy parts", "due": due, "notes": "waiting"},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -465,14 +466,14 @@ class HubAppTests(unittest.TestCase):
         block = next(i for i, line in enumerate(lines) if line.strip().startswith("<!-- tracker:start"))
         self.assertLess(heading, block)
         self.assertIn(payload["id"], lines[heading + 1])
-        self.assertIn("2026-11-20", lines[heading + 1])
+        self.assertIn(due, lines[heading + 1])
         self.assertIn("waiting", lines[heading + 2])
         items = self.client.get("/api/tasks", headers=HOST).get_json()["tasks"]
         manual = [item for item in items if item["kind"] == "manual"]
         self.assertEqual(len(manual), 1)
         self.assertEqual(manual[0]["id"], payload["id"])
         self.assertEqual(manual[0]["stage"], "My tasks")
-        self.assertEqual(manual[0]["due"], "2026-11-20")
+        self.assertEqual(manual[0]["due"], due)
         self.assertEqual(manual[0]["status"], "upcoming")
 
     def test_add_task_validation(self):

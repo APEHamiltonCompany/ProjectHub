@@ -6,7 +6,7 @@
 <section class="panel">
   <div class="panel-head"><h2>Create project manually</h2></div>
   <p class="small muted">Creates the project folder, note and time-estimate sheet from the template. Add links (SharePoint, email, etc.) on the project page afterwards.</p>
-  <form id="manual-project" autocomplete="off">
+  <form id="manual-project" autocomplete="off" data-layout="{{ folder_layout }}">
     <div class="manual-grid">
       <label><span>Customer</span><input type="text" name="customer" required></label>
       <label><span>SO numbers</span><input type="text" name="so" placeholder="SO-12345, SO-12346"></label>

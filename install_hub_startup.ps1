@@ -1,7 +1,7 @@
 ﻿$ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
-$pythonw = "C:\Users\Anthony.Zunino\AppData\Local\Programs\Python\Python312\pythonw.exe"
+$pythonw = Join-Path $root ".venv\Scripts\pythonw.exe"
 $user = "$env:USERDOMAIN\$env:USERNAME"
 
 $action = New-ScheduledTaskAction -Execute $pythonw -Argument "-m tracker.hub" -WorkingDirectory $root

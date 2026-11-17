@@ -1,6 +1,6 @@
 # Project Dashboard
 
-Static tracker output: [dashboard.html](file:///C:/repos/Projects/ProjectHub/output/dashboard.html)
+Static tracker output: [dashboard.html](file:///C:/repos/ProjectHub/output/dashboard.html)
 
 ## Overdue
 
