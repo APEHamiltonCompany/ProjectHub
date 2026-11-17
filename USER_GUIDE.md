@@ -130,6 +130,7 @@ Where tasks are saved:
 - Non-project tasks go into `My Tasks.md` in the project folder root (the path is set by `personal_tasks_path` in `config.yaml`), with an Obsidian tag for the category, for example `- [ ] Enter timesheet #admin 🔁 every week on Friday 📅 2026-11-13 🆔 m-1a2b3c4d`.
 
 Your own tasks show a "manual" tag. They can be edited or deleted from the hub, and they appear in the Gantt chart, the task table, the Monday page and every layout. The tracker never changes them.
+**Archive** moves the task to an **Archived** section at the bottom of the note, hidden from every view; restore it from the **Archived (N)** list on the Board or the project page.
 
 ### 2.1c Categories
 Every task has one category:
@@ -197,6 +198,16 @@ Click a project name, or go to `http://localhost:8765/p/<project number>` (for e
 - **Stage stepper and mini timeline**: where the project is, and its tasks on a small Gantt chart.
 - **Deadlines**: every step grouped by stage (My tasks, Pre-Fabrication, System Test, Closeout, Completion, PM schedule), with its due date, status and a checkbox. Click **⋯ adjust** on a row to override its date or add a blocker note. Use **By phase / By due date** in the panel header to switch to one list sorted by next due date (open tasks first, undated after, done at the bottom, each row tagged with its phase). The hub remembers your choice.
 - **Launch shortcut**: a deadline row can carry a one-click button that opens a local app, file, folder or https link. The default comes from `launch:` on a `workflow:` entry in `tracker/rules.yaml` (for example `launch: 'tool:wire_diagram_builder'` on Review CPR/SO and Wiring diagram, which resolves through `tools.wire_diagram_builder` in `tracker/config.yaml`). Change it for one project under **⋯ adjust** → **Shortcut**: **Set shortcut**, **Use template** or **No shortcut**. The project value is stored as `task_launch:` in the note frontmatter, so you can also edit it in Obsidian. It accepts a `.exe`, any file or folder, or an https link; in Explorer use Shift+right-click → **Copy as path** and paste. The hub waits up to 15 seconds for the launched app's window and brings it to the front.
+- **File templates**: a shortcut can also be `template:<name>`, which copies a template file into the project folder under a name built from the project's SO/QTE number and opens the copy. The template file itself is never written, moved or overwritten, and if the target file is already there the hub just opens it instead of copying again. Define the templates in `tracker/config.yaml`:
+  ```yaml
+  file_templates:
+    parts_request:
+      source: 'R:\APE_AE\TEMPLATES\Parts Request\PartsRequestSO-XXXXXXX.xlsx'
+      name: 'PartsRequest {ident}.xlsx'
+      folders: ['{project_folder}']
+      fill: {}
+  ```
+  `source` is the template to copy. `name` is the new filename and takes `{ident}` (first SO, else first QTE, else the project number), `{so}`, `{qte}`, `{project_no}`, `{customer}` and `{date}`; if a token has no value the copy stops with "this project has no ...". `folders` lists where the copy goes: `{project_folder}` is the project folder, any other entry is an absolute path that must already exist. `fill` is reserved for later. `tracker/rules.yaml` uses it on Parts Required for Testing as `launch: 'template:parts_request'`; override it for one project by typing `template:<name>` in **⋯ adjust** → **Shortcut**.
 - **Note > Rendered**: the whole note with real checkboxes. Tick a box to mark it done; click **N/A** to mark it not needed. Each change is saved to the `.md` file immediately.
 - **Note > Edit text**: the text editor on the left and a live preview on the right. The preview's checkboxes are clickable too. Nothing is written until you click **Save**, and an "Unsaved changes" flag shows until you do. If the file changed somewhere else since you opened it (for example in OneDrive or Notepad), the hub warns you instead of overwriting. You can then reload, or overwrite on purpose.
 - **Note > Live edit**: edit the formatted note directly, like Obsidian's live preview. Every line is shown formatted; click a line to see and edit its markdown in place. **Enter** starts a new line (lists and checkboxes continue automatically; press Enter on an empty item to end the list), **Backspace** at the start of a line joins it to the line above, **Tab**/**Shift+Tab** indents, the arrow keys move between lines and **Esc** stops editing. Checkboxes and links work without entering edit mode. It shares the same **Save** button, unsaved flag and conflict warning as Edit text, and the two tabs stay in sync. Open it directly with `?tab=live` on the project URL.

@@ -67,7 +67,7 @@
               {% if task.override_note %}<div class="small muted">{{ task.override_note }}</div>{% endif %}
               {% if task.kind == "manual" %}{{ macros.manual_actions(task) }}{{ macros.manual_edit(task) }}{% endif %}
             </div>
-            <div class="task-launch">{% if task.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="{{ project.key }}" data-task-id="{{ task.id }}" title="{{ task.launch }}">&#9654; {{ task.launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
+            <div class="task-launch">{% if task.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="{{ project.key }}" data-task-id="{{ task.id }}" title="{{ task.launch_title or task.launch }}">{% if task.launch_kind == "template" %}&#128196;{% else %}&#9654;{% endif %} {{ task.launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
             <div class="task-meta">
               <span class="nowrap">{{ task.due or "" }}{% if task.override_due %}<span class="small muted"> (override)</span>{% elif task.computed_due %}<span class="small muted"> (computed)</span>{% endif %}</span>
               {{ macros.status_pill(task.status) }}
@@ -95,6 +95,8 @@
         </ul>
       </details>
       {% endfor %}
+
+      {{ macros.archived_list(archived_project|default([])) }}
 
       <div class="task-form" data-key="{{ project.key }}">
         <input type="text" class="task-desc" placeholder="Description" maxlength="300" aria-label="Description">

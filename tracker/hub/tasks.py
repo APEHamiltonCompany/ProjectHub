@@ -12,6 +12,7 @@ NOTES_EMOJI = "\U0001F4DD"
 RECUR_EMOJI = "\U0001f501"
 HOURS_EMOJI = "\u23f1"
 HEADING = "**My tasks**"
+ARCHIVE_HEADING = "**Archived**"
 BLOCK_START_PREFIX = "<!-- tracker:start"
 DUE_EMOJI = notes.DUE_EMOJI
 ID_EMOJI = notes.ID_EMOJI
@@ -194,10 +195,11 @@ def first_due(rule, today: date) -> date:
     return result
 
 
-def parse_lines(text: str) -> list[dict]:
+def parse_lines(text: str, archived: bool = False) -> list[dict]:
     lines = text.replace("\r\n", "\n").split("\n")
     rows: list[dict] = []
     in_block = False
+    span = _archive_span(lines)
     for index, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith(BLOCK_START_PREFIX):
@@ -208,6 +210,8 @@ def parse_lines(text: str) -> list[dict]:
             continue
         match = CHECK_RE.match(line)
         if not match:
+            continue
+        if (span is not None and span[0] < index < span[1]) != archived:
             continue
         ident = ID_RE.search(line)
         due = DUE_RE.search(line)
@@ -327,6 +331,15 @@ def insert_manual(text: str, task_lines: list[str]) -> str:
         chunk = chunk + [""]
         lines = lines[:start_index] + chunk + lines[start_index:]
         return header + "\n".join(lines)
+    archive_index = None
+    for index, line in enumerate(lines):
+        if line.strip() == ARCHIVE_HEADING:
+            archive_index = index
+            break
+    if archive_index is not None:
+        chunk = [HEADING] + list(task_lines) + [""]
+        lines = lines[:archive_index] + chunk + lines[archive_index:]
+        return header + "\n".join(lines)
     if lines and lines[-1].strip() != "":
         lines = lines + [""]
     lines = lines + [HEADING] + list(task_lines) + [""]
@@ -378,6 +391,45 @@ def delete_manual(text: str, task_id: str) -> str:
     index = _find_manual(lines, task_id)
     del lines[index:_notes_end(lines, index)]
     return "\n".join(lines)
+
+
+def archive_manual(text: str, task_id: str) -> str:
+    lines = text.split("\n")
+    index = _find_manual(lines, task_id)
+    span = _archive_span(lines)
+    if span is not None and span[0] < index < span[1]:
+        raise KeyError(task_id)
+    end = _notes_end(lines, index)
+    chunk = lines[index:end]
+    del lines[index:end]
+    span = _archive_span(lines)
+    if span is not None:
+        lines[span[1]:span[1]] = chunk
+        return "\n".join(lines)
+    trailing = text.endswith("\n")
+    if lines and lines[-1].strip() != "":
+        lines = lines + [""]
+    lines = lines + [ARCHIVE_HEADING] + chunk
+    if trailing:
+        lines = lines + [""]
+    return "\n".join(lines)
+
+
+def unarchive_manual(text: str, task_id: str) -> str:
+    lines = text.split("\n")
+    index = _find_manual(lines, task_id)
+    span = _archive_span(lines)
+    if span is None or not span[0] < index < span[1]:
+        raise KeyError(task_id)
+    end = _notes_end(lines, index)
+    chunk = lines[index:end]
+    del lines[index:end]
+    span = _archive_span(lines)
+    if span is not None and span[1] == span[0] + 1:
+        del lines[span[0]]
+        if 0 < span[0] < len(lines) and lines[span[0] - 1].strip() == "" and lines[span[0]].strip() == "":
+            del lines[span[0] - 1]
+    return insert_manual("\n".join(lines), chunk)
 
 
 def set_mark(
@@ -655,6 +707,17 @@ def _notes_end(lines: list[str], index: int) -> int:
     while end < len(lines) and NOTES_RE.match(lines[end]):
         end += 1
     return end
+
+
+def _archive_span(lines: list[str]) -> tuple[int, int] | None:
+    for index, line in enumerate(lines):
+        if line.strip() != ARCHIVE_HEADING:
+            continue
+        end = index + 1
+        while end < len(lines) and (CHECK_RE.match(lines[end]) or NOTES_RE.match(lines[end])):
+            end += 1
+        return (index, end)
+    return None
 
 
 def _line_index(

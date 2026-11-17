@@ -49,3 +49,9 @@ ape_sheet:
   url: "https://hamiltonmarketing.sharepoint.com/:x:/s/RNOAPE/IQDm4sasM7CTR6tIlW4RZwudAQ5vAffff0kaw_GEz2RITfA?e=Jraqhi"
 tools:
   wire_diagram_builder: ""
+file_templates:
+  parts_request:
+    source: 'R:\APE_AE\TEMPLATES\Parts Request\PartsRequestSO-XXXXXXX.xlsx'
+    name: 'PartsRequest {ident}.xlsx'
+    folders: ['{project_folder}']
+    fill: {}

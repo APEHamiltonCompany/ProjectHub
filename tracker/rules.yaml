@@ -35,7 +35,7 @@ workflow:
   - {id: test_matrix, stage: Pre-Fabrication, title: "Test matrix in design review slides", trigger: internal_design_review, offset: 1}
   - {id: design_review, stage: Pre-Fabrication, title: "Design review: present wiring diagram + test matrix; update RMT"}
   - {id: apps_plan, stage: Pre-Fabrication, title: "Finish Apps Plan, send to ACE, post SO parts excel, email PM", trigger: design_review, offset: 5}
-  - {id: parts_for_testing, stage: Pre-Fabrication, title: "Parts Required for Testing list; email PC/PM/ME", trigger: work_order_firm, offset: 5}
+  - {id: parts_for_testing, stage: Pre-Fabrication, title: "Parts Required for Testing list; email PC/PM/ME", trigger: work_order_firm, offset: 5, launch: 'template:parts_request'}
   - {id: app_dev, stage: System Test, title: "Preliminary applications development (controllers, simulated apps)"}
   - {id: system_setup, stage: System Test, title: "System setup: unpack, photos, Vendor Device Cable sheet, Multiflex"}
   - {id: device_testing, stage: System Test, title: "Device handoff and functionality testing"}
