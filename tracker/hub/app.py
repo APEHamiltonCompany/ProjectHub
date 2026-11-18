@@ -20,6 +20,7 @@ from flask import Flask, abort, g, jsonify, render_template, request, url_for
 from markupsafe import Markup, escape
 
 from tracker import locking, matcher, notes
+from tracker import project_files
 from tracker import projects as projects_mod
 from tracker import rules as rules_mod
 from tracker import settings as settings_mod
@@ -27,7 +28,7 @@ from tracker import state as state_mod
 from tracker.hub import tasks as tasks_mod
 from tracker.hub import timesheet as timesheet_mod
 from tracker.hub import winfocus
-from tracker.sources import outlook_com
+from tracker.sources import ape_sheet, outlook_com
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -53,6 +54,7 @@ NEXT_MARK = {" ": "x", "x": "-", "-": " "}
 LAYOUTS = ("board", "timeline", "focus")
 ZOOMS = (100, 90, 80, 75, 70, 60, 50)
 ORIGIN_FILE = ".projecthub_origin"
+COMPLETION_STAGE = "Completion"
 DEFAULT_STAGES = ["Pre-Kickoff", "Pre-Fabrication", "System Test", "Closeout", "Completion"]
 
 
@@ -61,7 +63,8 @@ def _load_config(path: str | Path) -> dict:
         raise SystemExit("Config not found: %s\nRun setup.cmd to create it." % path)
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh) or {}
-    return settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
+    cfg = settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
+    return settings_mod.resolve_drives(cfg)
 
 
 def _ui_prefs(raw: dict) -> dict:
@@ -108,6 +111,22 @@ def _ui_update(payload: dict) -> dict:
 
 def _clean_path(value) -> str:
     return str(value or "").strip().strip('"').strip("'").strip().replace("\\", "/")
+
+
+def project_ident(project: dict) -> str:
+    """SO/QTE shown for a project: "SO-285770 (QTE-054686)", "QTE-054686", else the project number or name."""
+    so = ", ".join(project.get("so") or [])
+    qte = ", ".join(project.get("qte") or [])
+    if so and qte:
+        return "%s (%s)" % (so, qte)
+    return so or qte or str(project.get("project_no") or "") or str(project.get("name") or project.get("key") or "")
+
+
+def project_label(project: dict) -> str:
+    """One-line display name: "Customer · SO/QTE"."""
+    customer = str(project.get("customer") or "").strip()
+    ident = project_ident(project)
+    return "%s \u00b7 %s" % (customer, ident) if customer and ident else customer or ident
 
 
 def _iso(value) -> date | None:
@@ -287,13 +306,9 @@ def create_app(
     lock_file = locking.lock_path_for(cfg)
     run_log = ROOT / "output" / "hub_last_run.log"
     rules_path = Path(cfg.get("rules_path") or (ROOT / "tracker" / "rules.yaml"))
-    rules = rules_mod.load_rules(rules_path) if rules_path.is_file() else {"triggers": [], "workflow": [], "stages": []}
+    rules = rules_mod.load_rules(rules_path, cfg) if rules_path.is_file() else {"triggers": [], "workflow": [], "stages": [], "buckets": []}
     stage_order = list(rules.get("stages") or []) + [notes.PM_HEADING]
-    lifecycle: list[str] = []
-    for trigger in rules.get("triggers") or []:
-        name = str(trigger.get("stage") or "")
-        if name and name not in lifecycle:
-            lifecycle.append(name)
+    lifecycle: list[str] = rules_mod.bucket_order(rules)
     if lifecycle and "System Test" not in lifecycle:
         position = lifecycle.index("Closeout") if "Closeout" in lifecycle else len(lifecycle)
         lifecycle.insert(position, "System Test")
@@ -305,7 +320,11 @@ def create_app(
         for step in rules.get("workflow") or []
         if step.get("id")
     }
-    classify_choices = [(tid, label) for tid, label in CLASSIFY_CHOICES if tid == "ignore" or tid in trigger_ids]
+    classify_choices = [
+        (str(t.get("id")), str(t.get("label") or dict(CLASSIFY_CHOICES).get(t.get("id")) or t.get("id")))
+        for t in rules.get("triggers") or []
+        if t.get("id") != "assignment"
+    ] + [("ignore", "Ignore")]
 
     allowed_hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
     allowed_origins = {"http://127.0.0.1:%d" % port, "http://localhost:%d" % port}
@@ -486,6 +505,11 @@ def create_app(
             text = str((cfg.get("tools") or {}).get(text[5:].strip()) or "").strip()
             if not text:
                 return ""
+        elif text.startswith("file:"):
+            name = text[5:].strip()
+            if project_files.item_by_id(cfg, name) or project_files.group_by_id(cfg, name):
+                return "file:%s" % name
+            return resolve_launch("template:%s" % name)
         elif text.startswith("template:"):
             name = text[9:].strip()
             spec = (cfg.get("file_templates") or {}).get(name)
@@ -498,6 +522,8 @@ def create_app(
 
     def launch_label_for(target: str) -> str:
         text = str(target or "")
+        if text.startswith("file:"):
+            return project_file_label(text[5:].strip())
         if not text.startswith("template:"):
             return _launch_label(text)
         name = text[9:].strip()
@@ -506,6 +532,8 @@ def create_app(
 
     def launch_meta(target: str) -> dict:
         text = str(target or "")
+        if text.startswith("file:"):
+            return {"launch_kind": "template", "launch_title": "Open the project's %s (copied from the template if missing)" % project_file_label(text[5:].strip())}
         if not text.startswith("template:"):
             return {"launch_kind": "open", "launch_title": text}
         name = text[9:].strip()
@@ -611,6 +639,102 @@ def create_app(
                 pass
             raise
         return True
+
+    def ensure_project_note(project: dict) -> str:
+        """The project's note path, creating a minimal note in its folder when it has none."""
+        path = project.get("note_path") or ""
+        if path and notes.lp(path).is_file():
+            return path
+        folder = project.get("folder") or ""
+        if not folder or not notes.lp(folder).is_dir():
+            raise FileNotFoundError("project folder missing")
+        created, _new = projects_mod.create_note_for_folder(folder, project.get("customer") or "")
+        project["note_path"] = str(created)
+        return str(created)
+
+    def project_note(project: dict) -> str:
+        try:
+            return ensure_project_note(project)
+        except OSError:
+            return ""
+
+    def patch_snapshot(changes: dict[str, dict]) -> None:
+        """Apply per-project field changes to snapshot.json so pages show them before the next refresh."""
+        try:
+            data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for project in data.get("projects") or []:
+            update = changes.get(project.get("key"))
+            if update:
+                project.update(update)
+        tmp = snapshot_path.with_name(snapshot_path.name + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        os.replace(tmp, snapshot_path)
+
+    def project_file_label(name: str) -> str:
+        group = project_files.group_by_id(cfg, name)
+        if group:
+            return group["label"]
+        item = project_files.item_by_id(cfg, name)
+        return item["label"] if item else name
+
+    def file_choices(payload: dict) -> dict | None:
+        """Group picks sent by the hub; None keeps the automatic behaviour when nothing is configured."""
+        raw = payload.get("choices")
+        if raw is None and not project_files.specs(cfg)[1]:
+            return None
+        return raw if isinstance(raw, dict) else {}
+
+    def project_frontmatter(project: dict) -> dict:
+        path = project.get("note_path") or ""
+        if not path or not notes.lp(path).is_file():
+            return {}
+        data, _raw, _body = notes.split_frontmatter(notes.read_text(path)[0])
+        return data if isinstance(data, dict) else {}
+
+    def project_file_tokens(project: dict) -> dict:
+        return project_files.tokens_for(
+            project.get("customer") or "", project.get("so") or [], project.get("qte") or [], project.get("project_no") or ""
+        )
+
+    def save_file_choice(project: dict, group_id: str, value: str) -> None:
+        path = project_note(project)
+        if not path:
+            raise FileNotFoundError("note missing")
+        label = project_files.frontmatter_values(cfg, {group_id: value})[group_id]
+        with mutex:
+            with locking.file_lock(lock_file):
+                text, newline, bom, encoding = notes.read_text(path)
+                data, _raw, body = notes.split_frontmatter(text)
+                data = data if isinstance(data, dict) else {}
+                data[group_id] = label
+                notes.write_text(path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
+
+    def open_project_file(key: str, name: str) -> dict:
+        """Open a project file (an item id or a group id), copying it from the template if missing."""
+        project = project_by_key(key)
+        if project is None:
+            raise LookupError("unknown project")
+        item = project_files.item_by_id(cfg, name)
+        group = project_files.group_by_id(cfg, name)
+        if item is None and group is not None:
+            choice = project_files.read_choices(cfg, project_frontmatter(project)).get(group["id"])
+            if not choice:
+                raise ValueError("Choose a %s on the project page first" % group["label"].lower())
+            if choice == project_files.NONE:
+                raise ValueError("No %s for this project (set to None)" % group["label"].lower())
+            item = project_files.item_by_id(cfg, choice)
+        if item is None:
+            raise LookupError("unknown project file: %s" % name)
+        if item["group"]:
+            current = project_files.read_choices(cfg, project_frontmatter(project)).get(item["group"])
+            if current != item["id"]:
+                save_file_choice(project, item["group"], item["id"])
+        path, created = project_files.ensure_file(cfg, item, project.get("folder") or "", project_file_tokens(project))
+        opener = app.config.get("LAUNCHER") or launcher
+        opener(str(path))
+        return {"launched": str(path), "created": [str(path)] if created else [], "existing": [] if created else [str(path)]}
 
     def make_from_template(name: str, key: str, task_id: str) -> dict:
         spec = template_spec(name)
@@ -1011,9 +1135,9 @@ def create_app(
 
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
-            name = project.get("name") or ""
+            name = project_label(project)
             customer = project.get("customer") or ""
-            ident = " / ".join(list(project.get("so") or []) + list(project.get("qte") or []))
+            ident = project_ident(project)
             project_stage = project.get("stage") or ""
             parsed: list[dict] = []
             launch_overrides: dict = {}
@@ -1179,7 +1303,7 @@ def create_app(
                         "key": project.get("key") or "",
                         "id": row["id"],
                         "title": row["title"],
-                        "project_name": project.get("name") or "",
+                        "project_name": project_label(project),
                         "mark": row["mark"],
                     }
                 )
@@ -1212,9 +1336,21 @@ def create_app(
             "item": item,
         }
 
+    def completed_keys() -> set[str]:
+        return {
+            str(project.get("key") or "")
+            for project in snapshot().get("projects") or []
+            if (project.get("stage") or "") == COMPLETION_STAGE
+        }
+
+    def open_tasks(today: date) -> list[dict]:
+        """Live tasks without the projects in Completion (they only show as a count on the board)."""
+        done = completed_keys()
+        return [item for item in live_tasks(today) if item["key"] not in done]
+
     def gantt_rows(today: date) -> list[dict]:
         rows = []
-        for item in live_tasks(today):
+        for item in open_tasks(today):
             if not item["due"] or item["mark"] == "-":
                 continue
             due = _iso(item["due"])
@@ -1235,7 +1371,7 @@ def create_app(
         return rows
 
     def kpis(today: date) -> dict:
-        items = live_tasks(today)
+        items = open_tasks(today)
         monday = today - timedelta(days=today.weekday())
         done_this_week = 0
         for entry in state_mod.load(state_path).get("tick_log") or []:
@@ -1246,15 +1382,17 @@ def create_app(
             "overdue": sum(1 for item in items if item["status"] == "overdue"),
             "due_soon": sum(1 for item in items if item["status"] == "due-soon"),
             "open": sum(1 for item in items if item["mark"] == " "),
-            "projects": len(snapshot().get("projects") or []),
+            "projects": len(snapshot().get("projects") or []) - len(completed_keys()),
             "done_this_week": done_this_week,
         }
 
     def project_cards(today: date, state: dict) -> list[dict]:
-        items = live_tasks(today)
+        items = open_tasks(today)
         cards = []
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
+            if (project.get("stage") or "") == COMPLETION_STAGE:
+                continue
             rows = [
                 item for item in items if item["key"] == key and item["kind"] in ("workflow", "pm", "manual")
             ]
@@ -1271,7 +1409,8 @@ def create_app(
                     "name": project.get("name") or "",
                     "customer": project.get("customer") or "",
                     "project_no": project.get("project_no") or "",
-                    "ident": " / ".join(list(project.get("so") or []) + list(project.get("qte") or [])),
+                    "ident": project_ident(project),
+                    "label": project_label(project),
                     "level": project.get("level") or "",
                     "stage": project.get("stage") or "",
                     "ship_date": ship.isoformat() if ship else "",
@@ -1299,7 +1438,7 @@ def create_app(
             )
         return cards
 
-    def board_columns(cards: list[dict], stages: list[str]) -> list[dict]:
+    def board_columns(cards: list[dict], stages: list[str], completed: int = 0) -> list[dict]:
         order = list(lifecycle or stages)
         for card in cards:
             stage = card["stage"] or "Other"
@@ -1308,8 +1447,10 @@ def create_app(
         columns = []
         for stage in order:
             rows = [card for card in cards if (card["stage"] or "Other") == stage]
-            if rows or stage in lifecycle:
-                columns.append({"stage": stage, "cards": rows})
+            if stage == COMPLETION_STAGE:
+                columns.append({"stage": stage, "cards": [], "collapsed": True, "count": completed + len(rows)})
+            elif rows or stage in lifecycle:
+                columns.append({"stage": stage, "cards": rows, "count": len(rows)})
         return columns
 
     def focus_buckets(today: date, items: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -1348,10 +1489,12 @@ def create_app(
         return buckets, done_week
 
     def nav_projects() -> list[dict]:
-        items = live_tasks(date.today())
+        items = open_tasks(date.today())
         rows = []
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
+            if (project.get("stage") or "") == COMPLETION_STAGE:
+                continue
             mine = [item for item in items if item["key"] == key]
             overdue = sum(1 for item in mine if item["status"] == "overdue")
             soon = sum(1 for item in mine if item["status"] == "due-soon")
@@ -1359,9 +1502,13 @@ def create_app(
                 {
                     "key": key,
                     "name": project.get("name") or key,
+                    "customer": project.get("customer") or "",
+                    "ident": project_ident(project),
+                    "label": project_label(project),
                     "health": "bad" if overdue else "warn" if soon else "good",
                 }
             )
+        rows.sort(key=lambda row: (row["customer"].lower() or "\uffff", row["ident"].lower()))
         return rows
 
     @app.before_request
@@ -1383,6 +1530,8 @@ def create_app(
     def inject_globals():
         return {
             "token": token,
+            "file_groups": project_files.groups_for_ui(cfg),
+            "buckets": lifecycle,
             "generated": snapshot().get("generated") or "",
             "running": run_state["running"],
             "hub_port": port,
@@ -1402,12 +1551,14 @@ def create_app(
         state = state_mod.load(state_path)
         today = date.today()
         pending_rows = pending_new()
-        items = live_tasks(today)
+        items = open_tasks(today)
         overdue = [task_row(item) for item in items if item["status"] == "overdue"]
         soon = [task_row(item) for item in items if item["status"] == "due-soon"]
         upcoming = [task_row(item) for item in items if item["status"] == "upcoming"]
         projects = []
         for project in snap.get("projects") or []:
+            if (project.get("stage") or "") == COMPLETION_STAGE:
+                continue
             open_rows = [
                 item for item in items if item["key"] == (project.get("key") or "") and item["mark"] == " "
             ]
@@ -1447,7 +1598,7 @@ def create_app(
             gantt=gantt_rows(today),
             kpis=kpis(today),
             project_cards=cards,
-            board_columns=board_columns(cards, stages + ["Other"]),
+            board_columns=board_columns(cards, stages + ["Other"], len(completed_keys())),
             buckets=buckets,
             done_week=done_week,
             personal=personal,
@@ -1508,6 +1659,9 @@ def create_app(
             links=project_links(project, state),
             note=view,
             files=files,
+            project_file_rows=project_files.status(
+                cfg, project.get("folder") or "", project_file_tokens(project), project_frontmatter(project)
+            ),
             emails=emails,
             ship=ship,
             ship_days=(ship - today).days if ship else None,
@@ -1519,6 +1673,9 @@ def create_app(
             gantt=gantt,
             archived_project=[item for item in archived_tasks() if item["key"] == key],
             layout=current_layout(),
+            so_hints=project_so_hints(project),
+            so_can_rename=bool(so_rename_target(project, ["SO-000000"])),
+            folder_name=Path(project.get("folder") or "").name,
         )
 
     @app.get("/t/<task_id>")
@@ -1670,9 +1827,10 @@ def create_app(
                     "key": key,
                     "name": project.get("name") or key,
                     "customer": project.get("customer") or "",
-                    "ident": " / ".join(list(project.get("so") or []) + list(project.get("qte") or [])),
+                    "ident": project_ident(project),
                     "project_no": project.get("project_no") or "",
                     "stage": project.get("stage") or "",
+                    "stage_manual": project.get("stage_manual") or "",
                     "open_count": len(open_rows),
                     "last_email": dates[-1][:10] if dates else "",
                     "folder": project.get("folder") or "",
@@ -1689,6 +1847,7 @@ def create_app(
         return render_template(
             "projects.html",
             rows=rows,
+            stage_filter=str(request.args.get("stage") or ""),
             archived=archived,
             deleted=deleted,
             pending=pending_new(),
@@ -1908,7 +2067,9 @@ def create_app(
                         )
                 else:
                     try:
-                        info = projects_mod.create_from_pending(cfg, entry, folder_name or None)
+                        info = projects_mod.create_from_pending(
+                            cfg, entry, folder_name or None, choices=file_choices(payload)
+                        )
                     except ValueError as exc:
                         return jsonify({"error": str(exc)}), 400
                     projects_mod.mark_pending(state, message_id, "created")
@@ -1929,6 +2090,7 @@ def create_app(
             {
                 "folder": info["folder"],
                 "note_path": info["note_path"],
+                "files_skipped": info.get("files_skipped") or [],
                 "key": key,
                 "key_url": url_for("project_page", key=key),
             }
@@ -1985,7 +2147,9 @@ def create_app(
         with mutex:
             with locking.file_lock(lock_file):
                 try:
-                    info = projects_mod.create_from_pending(cfg, entry, folder_name or None)
+                    info = projects_mod.create_from_pending(
+                        cfg, entry, folder_name or None, choices=file_choices(payload)
+                    )
                 except ValueError as exc:
                     return jsonify({"error": str(exc)}), 400
         start_run()
@@ -1994,6 +2158,7 @@ def create_app(
             {
                 "folder": info["folder"],
                 "note_path": info["note_path"],
+                "files_skipped": info.get("files_skipped") or [],
                 "key": key,
                 "key_url": url_for("project_page", key=key),
             }
@@ -2573,10 +2738,8 @@ def create_app(
         project = project_by_key(key)
         if project is None:
             return None
-        path = project.get("note_path") or ""
-        if not path or not notes.lp(path).is_file():
-            return None
-        return Path(path)
+        path = project_note(project)
+        return Path(path) if path else None
 
     def task_ref(value) -> str | None:
         text = str(value or "").strip().upper()
@@ -2663,8 +2826,8 @@ def create_app(
             project = project_by_key(key)
             if project is None:
                 return jsonify({"error": "unknown project"}), 404
-            path = project.get("note_path") or ""
-            if not path or not notes.lp(path).is_file():
+            path = project_note(project)
+            if not path:
                 return jsonify({"error": "note missing"}), 400
             with mutex:
                 with locking.file_lock(lock_file):
@@ -3015,6 +3178,16 @@ def create_app(
         target = launch_target(key, task_id)
         if not target:
             return jsonify({"error": "no shortcut for this task"}), 404
+        if target.startswith("file:"):
+            try:
+                result = open_project_file(key, target[5:].strip())
+            except (LookupError, FileNotFoundError) as exc:
+                return jsonify({"error": str(exc)}), 404
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            except OSError as exc:
+                return jsonify({"error": str(exc)}), 500
+            return jsonify(result)
         if target.startswith("template:"):
             try:
                 result = make_from_template(target[9:].strip(), key, task_id)
@@ -3034,6 +3207,304 @@ def create_app(
             return jsonify({"error": str(exc)}), 500
         return jsonify({"launched": target})
 
+    @app.post("/api/projects/stage")
+    def api_projects_stage():
+        payload = request.get_json(silent=True) or {}
+        keys = payload.get("keys")
+        if isinstance(payload.get("key"), str):
+            keys = [payload["key"]]
+        if not isinstance(keys, list) or not keys or len(keys) > 1000:
+            return jsonify({"error": "choose at least one project"}), 400
+        stage = str(payload.get("stage") or "").strip()
+        if stage and stage not in lifecycle:
+            return jsonify({"error": "unknown stage: %s" % stage}), 400
+        changes, failed = apply_stages([(str(key), stage) for key in keys], "")
+        if not stage and changes:
+            start_run()
+        return jsonify({"ok": not failed, "updated": len(changes), "failed": failed, "stage": stage}), (200 if changes or not failed else 400)
+
+    def apply_stages(pairs: list[tuple[str, str]], source: str) -> tuple[dict, list[str]]:
+        """Pin each (key, stage) in its note (creating the note if needed) and in snapshot.json."""
+        changes: dict[str, dict] = {}
+        failed: list[str] = []
+        with mutex:
+            with locking.file_lock(lock_file):
+                for key, stage in pairs:
+                    project = project_by_key(key)
+                    if project is None:
+                        failed.append("%s: unknown project" % key)
+                        continue
+                    try:
+                        path = ensure_project_note(project)
+                        projects_mod.set_manual_stage(path, stage, source)
+                    except OSError as exc:
+                        failed.append("%s: %s" % (project.get("name") or key, exc))
+                        continue
+                    update = {"note_path": path, "stage_manual": stage, "stage_manual_source": source if stage else ""}
+                    if stage:
+                        update["stage"] = stage
+                    changes[key] = update
+                if changes:
+                    patch_snapshot(changes)
+        return changes, failed
+
+    def so_owner(so: str, key: str) -> dict | None:
+        for project in snapshot().get("projects") or []:
+            if project.get("key") != key and so in (project.get("so") or []):
+                return project
+        return None
+
+    def so_rename_target(project: dict, sos: list[str]) -> str:
+        folder = Path(project.get("folder") or "")
+        if not str(folder) or not projects_mod._inside(live["vault"], folder):
+            return ""
+        return projects_mod.so_folder_name(folder.name, sos, matcher.folder_layout(cfg))
+
+    def add_sos(key: str, sos: list[str], rename: bool) -> dict:
+        """Add SO numbers to a project's note, optionally rename its folder to "SO-... (QTE-...)", and move the
+        state kept under the old key. Raises LookupError / ValueError / OSError (nothing changed)."""
+        project = project_by_key(key)
+        if project is None:
+            raise LookupError("unknown project")
+        have = list(project.get("so") or [])
+        new = sorted(set(sos) - set(have))
+        if not new:
+            raise ValueError("%s already has %s" % (project.get("name") or key, ", ".join(sos) or "those SOs"))
+        warnings: list[str] = []
+        for so in new:
+            owner = so_owner(so, key)
+            if owner is not None:
+                warnings.append("%s also has its own folder: %s" % (so, owner.get("name") or owner.get("key")))
+        merged_all = sorted(set(have) | set(new))
+        new_key = project.get("project_no") or merged_all[0]
+        old_prefix = projects_mod.id_prefix_for(project.get("project_no") or "", key)
+        folder = Path(project.get("folder") or "")
+        note_path = ""
+        renamed = ""
+        with mutex:
+            with locking.file_lock(lock_file):
+                note_path = ensure_project_note(project)
+                merged = projects_mod.add_so(note_path, new, id_prefix=old_prefix if new_key != key else "")
+                target_name = so_rename_target(project, merged) if rename else ""
+                if target_name and target_name != folder.name:
+                    target = folder.parent / target_name
+                    if notes.lp(target).exists():
+                        warnings.append("Folder not renamed: %s already exists" % target_name)
+                    else:
+                        try:
+                            move_folder(folder, target)
+                        except OSError as exc:
+                            warnings.append("Folder not renamed (is a file open?): %s" % exc)
+                        else:
+                            renamed = target_name
+                            old_note = Path(note_path)
+                            note_path = str(target / old_note.name)
+                            if old_note.stem == folder.name:
+                                new_note = target / (target_name + old_note.suffix)
+                                try:
+                                    notes.lp(target / old_note.name).rename(notes.lp(new_note))
+                                    note_path = str(new_note)
+                                except OSError:
+                                    pass
+                            folder = target
+                update = {"key": new_key, "so": merged, "note_path": note_path, "folder": str(folder)}
+                if renamed:
+                    update["name"] = renamed
+                update["so_hints"] = [hint for hint in project.get("so_hints") or [] if hint.get("so") not in merged]
+                patch_snapshot({key: update})
+
+        if new_key != key:
+
+            def migrate(state: dict) -> None:
+                for bucket in ("projects", "user_links"):
+                    stored = state.get(bucket) or {}
+                    if key in stored and new_key not in stored:
+                        stored[new_key] = stored.pop(key)
+                    state[bucket] = stored
+
+            mutate_state(migrate)
+        return {"key": new_key, "so": merged, "added": new, "renamed": renamed, "warnings": warnings}
+
+    def parse_sos(value) -> list[str]:
+        text = " ".join(str(item) for item in value) if isinstance(value, list) else str(value or "")
+        return sorted(matcher.extract_keys(text)["so"])
+
+    @app.post("/api/projects/so")
+    def api_projects_so():
+        payload = request.get_json(silent=True) or {}
+        sos = parse_sos(payload.get("so"))
+        if not sos:
+            return jsonify({"error": "enter SO numbers like SO-285770"}), 400
+        try:
+            result = add_sos(str(payload.get("key") or ""), sos, payload.get("rename") is not False)
+        except LookupError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"error": "Could not update the project: %s" % exc}), 500
+        start_run()
+        return jsonify(dict(result, ok=True))
+
+    @app.post("/api/projects/so/dismiss")
+    def api_projects_so_dismiss():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        sos = parse_sos(payload.get("so"))
+        project = project_by_key(key)
+        if project is None:
+            return jsonify({"error": "unknown project"}), 404
+        if len(sos) != 1:
+            return jsonify({"error": "one SO number expected"}), 400
+        with mutex:
+            with locking.file_lock(lock_file):
+                try:
+                    path = ensure_project_note(project)
+                    projects_mod.dismiss_so(path, sos[0])
+                except OSError as exc:
+                    return jsonify({"error": "Could not update the note: %s" % exc}), 500
+                patch_snapshot(
+                    {
+                        key: {
+                            "note_path": path,
+                            "so_dismissed": sorted(set(project.get("so_dismissed") or []) | set(sos)),
+                            "so_hints": [hint for hint in project.get("so_hints") or [] if hint.get("so") != sos[0]],
+                        }
+                    }
+                )
+        return jsonify({"ok": True, "key": key, "so": sos[0]})
+
+    def project_so_hints(project: dict) -> list[dict]:
+        have = set(project.get("so") or []) | set(project.get("so_dismissed") or [])
+        out = []
+        for hint in project.get("so_hints") or []:
+            if hint.get("so") in have:
+                continue
+            owner = so_owner(str(hint.get("so") or ""), project.get("key") or "")
+            out.append(dict(hint, owner=(owner.get("name") or owner.get("key")) if owner else ""))
+        return out
+
+    def sync_projects() -> list[dict]:
+        out = []
+        for project in snapshot().get("projects") or []:
+            item = dict(project)
+            dates = sorted(str(email.get("date") or "") for email in project.get("emails") or [])
+            item["last_email"] = dates[-1][:10] if dates else ""
+            out.append(item)
+        return out
+
+    @app.post("/api/tracker-sync/preview")
+    def api_tracker_sync_preview():
+        sheet = ape_sheet.load(cfg, download=True)
+        if not sheet.get("ok"):
+            return jsonify({"error": "Could not read the Project Tracking sheet: %s" % (sheet.get("error") or "unknown error")}), 502
+        rows = sheet.get("rows") or []
+        projects = sync_projects()
+        proposals = ape_sheet.sync_proposals(rows, projects, date.today(), lifecycle)
+        so_items = ape_sheet.so_suggestions(rows, projects, date.today())
+        by_key = {project.get("key"): project for project in projects}
+        planned: dict[str, list[str]] = {}
+        for item in so_items:
+            if item["checked"]:
+                planned.setdefault(item["key"], []).append(item["so"])
+        for item in so_items:
+            project = by_key.get(item["key"]) or {}
+            sos = sorted(set(project.get("so") or []) | set(planned.get(item["key"]) or []) | {item["so"]})
+            item["rename_to"] = so_rename_target(project, sos)
+        tabs: dict[str, int] = {}
+        for row in rows:
+            tabs[row.get("tab") or ""] = tabs.get(row.get("tab") or "", 0) + 1
+        return jsonify(
+            {
+                "proposals": proposals,
+                "so_suggestions": so_items,
+                "sheet": {
+                    "kind": sheet.get("kind") or "",
+                    "updated": sheet.get("source_mtime_label") or "",
+                    "warning": sheet.get("warning") or "",
+                    "tabs": tabs,
+                },
+            }
+        )
+
+    @app.post("/api/tracker-sync/apply")
+    def api_tracker_sync_apply():
+        payload = request.get_json(silent=True) or {}
+        items = payload.get("items") or []
+        so_items = payload.get("so_items") or []
+        if not isinstance(items, list) or not isinstance(so_items, list) or not (items or so_items) or len(items) + len(so_items) > 5000:
+            return jsonify({"error": "nothing selected"}), 400
+        pairs = []
+        for item in items:
+            key = str((item or {}).get("key") or "")
+            stage = str((item or {}).get("stage") or "").strip()
+            if not key or stage not in lifecycle:
+                return jsonify({"error": "unknown stage: %s" % stage}), 400
+            pairs.append((key, stage))
+        grouped: dict[str, list[str]] = {}
+        for item in so_items:
+            key = str((item or {}).get("key") or "")
+            sos = parse_sos((item or {}).get("so"))
+            if not key or not sos:
+                return jsonify({"error": "bad SO item"}), 400
+            grouped.setdefault(key, []).extend(sos)
+        changes, failed = apply_stages(pairs, ape_sheet.SYNC_SOURCE) if pairs else ({}, [])
+        added = 0
+        renamed = 0
+        warnings: list[str] = []
+        for key, sos in grouped.items():
+            try:
+                result = add_sos(key, sos, payload.get("rename") is not False)
+            except (LookupError, ValueError, OSError) as exc:
+                failed.append("%s: %s" % (key, exc))
+                continue
+            added += len(result["added"])
+            renamed += 1 if result["renamed"] else 0
+            warnings.extend(result["warnings"])
+        if added:
+            start_run()
+        ok = bool(changes or added)
+        return jsonify(
+            {"ok": not failed, "updated": len(changes), "so_added": added, "renamed": renamed, "warnings": warnings, "failed": failed}
+        ), (200 if ok or not failed else 400)
+
+    @app.post("/api/projects/files/open")
+    def api_project_file_open():
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = open_project_file(str(payload.get("key") or ""), str(payload.get("item") or ""))
+        except (LookupError, FileNotFoundError) as exc:
+            return jsonify({"error": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify(result)
+
+    @app.post("/api/projects/files/choose")
+    def api_project_file_choose():
+        payload = request.get_json(silent=True) or {}
+        project = project_by_key(str(payload.get("key") or ""))
+        if project is None:
+            return jsonify({"error": "unknown project"}), 404
+        group = project_files.group_by_id(cfg, str(payload.get("group") or ""))
+        if group is None:
+            return jsonify({"error": "unknown group"}), 400
+        value = project_files.resolve_option(group, payload.get("option"))
+        if value is None:
+            return jsonify({"error": "unknown option"}), 400
+        if value == project_files.NONE and not group["none_allowed"]:
+            return jsonify({"error": "A %s is required" % group["label"].lower()}), 400
+        try:
+            save_file_choice(project, group["id"], value)
+        except FileNotFoundError as exc:
+            return jsonify({"error": str(exc)}), 404
+        rows = project_files.status(
+            cfg, project.get("folder") or "", project_file_tokens(project), project_frontmatter(project)
+        )
+        row = next((r for r in rows if r.get("group") and r["group"]["id"] == group["id"]), {})
+        return jsonify({"group": group["id"], "choice": value, "file": row.get("file", ""), "exists": row.get("exists", False), "error": row.get("error", "")})
+
     @app.post("/api/task/launch_set")
     def api_task_launch_set():
         payload = request.get_json(silent=True) or {}
@@ -3044,7 +3515,10 @@ def create_app(
         reset = bool(payload.get("reset"))
         target = str(payload.get("target") or "").strip().strip('"').strip("'").strip()
         if not reset and target and not _is_http(target) and not notes.lp(target).exists():
-            if target.startswith("template:"):
+            if target.startswith("file:"):
+                if not resolve_launch(target):
+                    return jsonify({"error": "unknown project file: %s" % target[5:].strip()}), 400
+            elif target.startswith("template:"):
                 if not template_spec(target[9:].strip()):
                     return jsonify({"error": "unknown template: %s" % target[9:].strip()}), 400
             elif target.startswith("tool:"):

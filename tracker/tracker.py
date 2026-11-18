@@ -36,7 +36,8 @@ def load_config(path: str | Path) -> dict:
         raise SystemExit("Config not found: %s\nRun setup.cmd to create it." % path)
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh) or {}
-    return settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
+    cfg = settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
+    return settings_mod.resolve_drives(cfg)
 
 
 def render_template(text: str, values: dict) -> str:
@@ -51,10 +52,8 @@ def yaml_list(values: list[str]) -> str:
 
 
 def task_prefix(project: Project) -> str:
-    if project.project_no:
-        return "p" + project.project_no
-    slug = re.sub(r"[^a-z0-9]", "", project.key.lower())
-    return "p" + (slug or "project")
+    """Task ids start with this. id_prefix (frontmatter) keeps the ids stable when an SO is added to a QTE project."""
+    return project.id_prefix or projects_mod.id_prefix_for(project.project_no, project.key)
 
 
 def create_project(cfg: dict, email: Email, parsed: dict, stage: str, dry_run: bool) -> Project | None:
@@ -182,6 +181,8 @@ def collect_trigger_dates(
         trigger = forced or (None if reply else rules_mod.classify(email.subject, rules))
 
         if project is None:
+            if trigger and trigger.get("id") == "assignment" and matcher.addressed_to_me(email.to, cfg.get("me")) is False:
+                continue
             if trigger and trigger.get("id") == "assignment":
                 if cfg.get("auto_create_projects", True):
                     parsed = matcher.parse_assignment_subject(email.subject)
@@ -234,6 +235,24 @@ def collect_trigger_dates(
             triggers.pop(project.key, None)
 
     return triggers, unmatched, prune_pending(pending, projects), matched
+
+
+def ensure_notes(projects: list[Project], dry_run: bool) -> list[str]:
+    """Give every project folder without a .md note a minimal one (never overwrites)."""
+    created: list[str] = []
+    for project in projects:
+        if project.note_path:
+            continue
+        try:
+            path, new = projects_mod.create_note_for_folder(project.folder, project.customer, dry_run=dry_run)
+        except OSError as exc:
+            out("  could not create note in %s: %s" % (project.folder, exc))
+            continue
+        if new:
+            created.append(str(path))
+        if not dry_run:
+            project.note_path = str(path)
+    return created
 
 
 def slug_for(name: str) -> str:
@@ -440,6 +459,30 @@ def ape_sheet_index(sheet: dict | None) -> dict:
     return index
 
 
+def so_hints(emails: list[Email], projects: list[Project]) -> dict[str, list[dict]]:
+    """SO numbers a QTE project may have been converted to: an email subject that names one of the project's
+    QTEs and an SO the project doesn't list (and the user hasn't dismissed). Newest email per SO."""
+    by_qte: dict[str, Project] = {}
+    for project in projects:
+        for value in project.qte:
+            by_qte.setdefault(value, project)
+    found: dict[str, dict[str, dict]] = {}
+    for email in sorted(emails, key=lambda e: e.date):
+        keys = matcher.extract_keys(email.subject)
+        if not keys["so"] or not keys["qte"]:
+            continue
+        owners = {id(by_qte[value]): by_qte[value] for value in keys["qte"] if value in by_qte}
+        for project in owners.values():
+            for so in sorted(keys["so"] - set(project.so) - set(project.so_dismissed)):
+                found.setdefault(project.key, {})[so] = {
+                    "so": so,
+                    "subject": email.subject,
+                    "date": email.date.astimezone().date().isoformat(),
+                    "message_id": email.message_id,
+                }
+    return {key: sorted(items.values(), key=lambda item: item["so"]) for key, items in found.items()}
+
+
 def build_snapshot(
     today: date,
     projects: list[Project],
@@ -450,6 +493,7 @@ def build_snapshot(
     unmatched: list[dict],
     generated: str,
     sheet: dict | None = None,
+    hints: dict | None = None,
 ) -> dict:
     sheet_rows = {}
     if sheet and sheet.get("ok"):
@@ -509,6 +553,10 @@ def build_snapshot(
                 "qte": list(project.qte),
                 "level": project.level,
                 "stage": project.stage,
+                "stage_manual": project.stage_manual,
+                "stage_manual_source": project.stage_manual_source,
+                "so_hints": list((hints or {}).get(project.key) or []),
+                "so_dismissed": list(project.so_dismissed),
                 "assigned": project.assigned,
                 "ship_date": ship_date,
                 "ship_source": ship_source,
@@ -644,7 +692,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
     rules_path = Path(cfg.get("rules_path") or (config_path.parent / "rules.yaml"))
     if not rules_path.is_file():
         rules_path = HERE / "rules.yaml"
-    rules = rules_mod.load_rules(rules_path)
+    rules = rules_mod.load_rules(rules_path, cfg)
     holidays = rules_mod.parse_holidays(cfg.get("holidays") or [])
     today = date.today()
     due_soon_days = int(cfg.get("due_soon_days") or 3)
@@ -658,6 +706,9 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
     projects = matcher.build_projects(
         cfg.get("vault") or "", cfg.get("exclude_folders") or [], matcher.folder_layout(cfg)
     )
+    created_notes = ensure_notes(projects, args.dry_run)
+    if created_notes:
+        out("project notes %s: %d (folders that had no .md note)" % ("that would be created" if args.dry_run else "created", len(created_notes)))
     index = matcher.build_index(projects)
     emails = collect_all(cfg, since_days=args.since)
     out("projects: %d, emails: %d" % (len(projects), len(emails)))
@@ -710,6 +761,8 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         tasks, stage = build_tasks(
             project, project_triggers, rules, holidays, today, schedule=schedule, pm_include=pm_include
         )
+        if project.stage_manual:
+            stage = project.stage_manual
         project.stage = stage
         project.triggers = dict(project_triggers)
         body = ""
@@ -819,7 +872,8 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         out("log appended: %s" % log_path)
         snapshot_path = Path(cfg.get("snapshot_path") or (ROOT / "output" / "snapshot.json"))
         snapshot = build_snapshot(
-            today, projects, triggers, matched, info, pending, unmatched, generated, sheet=sheet
+            today, projects, triggers, matched, info, pending, unmatched, generated, sheet=sheet,
+            hints=so_hints(emails, projects),
         )
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")

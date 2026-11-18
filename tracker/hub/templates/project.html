@@ -27,9 +27,29 @@
     <div class="hero-meta">
       <div><span class="small muted">Ship date</span><div>{{ ship or "n/a" }} {{ macros.ship_badge(ship_days) }}{% if project.ship_source == "sheet" %}<span class="small muted"> (from sheet)</span>{% endif %}</div></div>
       <div><span class="small muted">Design need-by</span><div>{{ design or "n/a" }}{% if design_days is not none %}<span class="small muted"> ({{ design_days }}d)</span>{% endif %}</div></div>
-      <div><span class="small muted">Stage</span><div>{{ project.stage or "?" }}</div></div>
+      <div><span class="small muted">Stage{% if project.stage_manual %} (set by hand){% endif %}</span><div>
+        <select class="stage-select" data-action="stage-set" data-key="{{ project.key }}" aria-label="Stage" title="Set by hand: wins over emails. Choose 'Follow emails' to undo.">
+          {% if not project.stage_manual %}<option value="" selected>{{ project.stage or "Unknown" }} (from emails)</option>{% endif %}
+          {% for bucket in buckets %}<option value="{{ bucket }}"{% if project.stage_manual == bucket %} selected{% endif %}>{{ bucket }}</option>{% endfor %}
+          {% if project.stage_manual %}<option value="">Follow emails</option>{% endif %}
+        </select>
+      </div></div>
       <div><span class="small muted">Team</span><div>{{ macros.avatars(project.team) }}</div></div>
+      <div><span class="small muted">SO numbers</span><div class="so-edit">
+        <span>{{ (project.so or [])|join(", ") or "none yet" }}</span>
+        <input type="text" id="so-input" class="so-input" placeholder="SO-######" aria-label="Add SO numbers" title="One or more SO numbers, separated by commas or spaces">
+        <button type="button" class="btn small" data-action="so-add" data-key="{{ project.key }}">Add SO</button>
+        {% if so_can_rename %}<label class="small so-rename-label" title="The QTE stays in the name so both are easy to find"><input type="checkbox" id="so-rename" checked> rename folder to "SO-&hellip; ({{ folder_name }})"</label>{% endif %}
+      </div></div>
     </div>
+    {% for hint in so_hints %}
+    <div class="so-hint">
+      <span>Email <q>{{ hint.subject }}</q> ({{ hint.date }}) mentions <strong>{{ hint.so }}</strong>.</span>
+      {% if hint.owner %}<span class="pill pill-sheet">{{ hint.so }} already has its own folder: {{ hint.owner }}</span>{% endif %}
+      <button type="button" class="btn small primary" data-action="so-add" data-key="{{ project.key }}" data-so="{{ hint.so }}">Add {{ hint.so }}</button>
+      <button type="button" class="btn small ghost" data-action="so-dismiss" data-key="{{ project.key }}" data-so="{{ hint.so }}">Dismiss</button>
+    </div>
+    {% endfor %}
   </div>
   <div class="hero-actions">
     <button type="button" class="btn primary" id="open-tab-group" data-key="{{ project.key }}">Open as tab group</button>
@@ -229,6 +249,32 @@
       </ul>
       {% else %}<p class="muted">none</p>{% endif %}
     </section>
+
+    {% if project_file_rows %}
+    <section class="panel" id="project-files">
+      <div class="panel-head"><h2>Project files</h2></div>
+      <ul class="file-list">
+        {% for row in project_file_rows %}
+        <li class="project-file" data-group="{{ row.group.id if row.group else '' }}">
+          <div>
+            <strong>{{ row.label }}</strong>
+            {% if row.group %}
+            <select class="project-file-choice" data-action="project-file-choose" data-key="{{ project.key }}" data-group="{{ row.group.id }}" aria-label="{{ row.label }}">
+              {% if not row.choice %}<option value="" selected>Choose...</option>{% endif %}
+              {% for option in row.group.options %}<option value="{{ option.id }}"{% if row.choice == option.id %} selected{% endif %}>{{ option.label }}</option>{% endfor %}
+              {% if row.group.none_allowed %}<option value="none"{% if row.choice == "none" %} selected{% endif %}>None</option>{% endif %}
+            </select>
+            {% endif %}
+            <div class="small muted file-name">{% if row.error %}{{ row.error }}{% elif row.file %}{{ row.file }}{% if not row.exists %} (not created yet){% endif %}{% endif %}</div>
+          </div>
+          {% if row.item and not row.error %}
+          <button type="button" class="btn small" data-action="project-file-open" data-key="{{ project.key }}" data-item="{{ row.item }}">{% if row.exists %}Open{% else %}Create{% endif %}</button>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
 
     <section class="panel">
       <div class="panel-head"><h2>Folder files</h2><span class="small muted">{{ files|length }}</span></div>

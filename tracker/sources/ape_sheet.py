@@ -26,6 +26,7 @@ HUB_STAGE_GROUPS = {
     "design review": 2,
     "apps plan": 2,
     "pre-fabrication": 2,
+    "fabrication": 3,
     "fabrication/test": 3,
     "system test": 3,
     "closeout": 4,
@@ -55,6 +56,11 @@ FIELD_MATCHERS = (
 )
 FIELD_NAMES = tuple(name for name, _match in FIELD_MATCHERS)
 TABS = (("Active", "Active Projects"), ("New", "New Projects"))
+COMPLETED_TAB = "Completed"
+COMPLETED_PREFIX = "completed"
+SHAREPOINT = "sharepoint"
+SHORTCUT_PATTERN = "ape project tracking*.url"
+NEW_ROW_DAYS = 45
 
 
 def _sheet_cfg(cfg: dict) -> dict:
@@ -187,8 +193,94 @@ def _resolve_path(raw: str, pattern: str) -> Path | None:
     return _search_folder(path, pattern)
 
 
+def shortcut_url(path: str | Path) -> str:
+    """URL= line of a Windows internet shortcut (.url)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        if line.strip().lower().startswith("url="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def shortcut_path(cfg: dict) -> Path | None:
+    """The SharePoint shortcut to the sheet: ape_sheet.shortcut (a .url file or a folder holding one), or a .url ape_sheet.path."""
+    sheet = _sheet_cfg(cfg)
+    raw = str(sheet.get("shortcut") or "").strip()
+    if raw:
+        path = Path(raw)
+        if path.is_file() and path.suffix.lower() == ".url":
+            return path
+        if path.is_dir():
+            found = _search_folder(path, SHORTCUT_PATTERN)
+            if found is not None:
+                return found
+    raw = str(sheet.get("path") or "").strip()
+    if raw and raw.lower().endswith(".url") and Path(raw).is_file():
+        return Path(raw)
+    return None
+
+
+def _copy_dir(cfg: dict) -> Path:
+    return Path(str(_sheet_cfg(cfg).get("copy_dir") or (ROOT / "data" / "ape_tracker")))
+
+
+def newest_copy(copy_dir: Path) -> Path | None:
+    try:
+        files = [
+            entry
+            for entry in Path(copy_dir).iterdir()
+            if entry.is_file() and entry.name.startswith(COPY_PREFIX) and entry.suffix.lower() == ".xlsx"
+        ]
+    except OSError:
+        return None
+    return max(files, key=lambda entry: entry.stat().st_mtime) if files else None
+
+
+def download_copy(url: str, copy_dir: Path, keep: int = 5) -> Path:
+    """Open the SharePoint workbook read-only in a hidden Excel (signed in as the user) and save a local copy."""
+    import pythoncom
+    import win32com.client
+
+    url = url.split("?", 1)[0]
+    copy_dir = Path(copy_dir)
+    copy_dir.mkdir(parents=True, exist_ok=True)
+    target = copy_dir / ("%s%s.xlsx" % (COPY_PREFIX, datetime.now().strftime("%Y%m%d-%H%M%S")))
+    temp = copy_dir / (".ape-download-%d.xlsx" % os.getpid())
+    pythoncom.CoInitialize()
+    excel = None
+    try:
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        try:
+            excel.AskToUpdateLinks = False
+        except Exception:
+            pass
+        workbook = excel.Workbooks.Open(url, UpdateLinks=0, ReadOnly=True, Notify=False, AddToMru=False)
+        try:
+            workbook.SaveCopyAs(str(temp))
+        finally:
+            workbook.Close(SaveChanges=False)
+    finally:
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+    os.replace(temp, target)
+    _prune(copy_dir, keep)
+    return target
+
+
 def resolve_info(cfg: dict) -> dict:
     sheet = _sheet_cfg(cfg)
+    shortcut = shortcut_path(cfg)
+    if shortcut is not None and shortcut_url(shortcut):
+        return {"path": shortcut, "kind": SHAREPOINT}
     pattern = str(sheet.get("pattern") or "APE Project Tracking*.xlsx").lower()
     roots = candidate_roots()
     override = str((cfg or {}).get("ape_sheet_path") or "").strip()
@@ -403,12 +495,17 @@ def _read(path: Path) -> tuple[list[dict], dict[str, str]]:
             if sheet_name not in wb.sheetnames:
                 continue
             rows.extend(_rows_from(wb[sheet_name], tab, names))
+        for sheet_name in wb.sheetnames:
+            if sheet_name.strip().lower().startswith(COMPLETED_PREFIX):
+                rows.extend(_rows_from(wb[sheet_name], COMPLETED_TAB, names))
         return rows, names
     finally:
         wb.close()
 
 
-def load(cfg: dict) -> dict:
+def load(cfg: dict, download: bool | None = None) -> dict:
+    """Read the sheet. A SharePoint shortcut is downloaded when download is True, or (None) when the last copy
+    is older than ape_sheet.download_hours (default 12)."""
     sheet = _sheet_cfg(cfg)
     try:
         stale_hours = int(sheet.get("stale_hours") or 48)
@@ -438,33 +535,53 @@ def load(cfg: dict) -> dict:
         source = info["path"]
         kind = info["kind"]
         result["kind"] = kind
-        result["warning"] = "" if kind == "synced" else shortcut_warning(cfg)
+        result["warning"] = "" if kind in ("synced", SHAREPOINT) else shortcut_warning(cfg)
         if source is None:
             result["error"] = "no tracker sheet found"
             return result
-        stat = source.stat()
-        copy_dir = Path(str(sheet.get("copy_dir") or (ROOT / "data" / "ape_tracker")))
-        try:
-            copy_path = snapshot_copy(source, copy_dir)
-        except OSError as exc:
-            if kind == "synced":
-                result["error"] = (
-                    "Could not read the synced file yet (OneDrive may still be downloading it): %s" % exc
-                )
-                return result
-            raise
+        copy_dir = _copy_dir(cfg)
+        if kind == SHAREPOINT:
+            copy_path = newest_copy(copy_dir)
+            try:
+                max_age = float(sheet.get("download_hours") or 12)
+            except (TypeError, ValueError):
+                max_age = 12.0
+            age = (datetime.now().timestamp() - copy_path.stat().st_mtime) / 3600.0 if copy_path else None
+            fetch = (age is None or age > max_age) if download is None else download
+            if fetch:
+                try:
+                    copy_path = download_copy(shortcut_url(source), copy_dir)
+                except Exception as exc:
+                    if copy_path is None:
+                        result["error"] = "Could not download the tracker sheet from SharePoint: %s" % (str(exc) or exc.__class__.__name__)
+                        return result
+                    result["warning"] = "Could not download a fresh copy from SharePoint (%s); using the last copy." % (
+                        str(exc) or exc.__class__.__name__
+                    )
+            stat = copy_path.stat()
+        else:
+            stat = source.stat()
+            try:
+                copy_path = snapshot_copy(source, copy_dir)
+            except OSError as exc:
+                if kind == "synced":
+                    result["error"] = (
+                        "Could not read the synced file yet (OneDrive may still be downloading it): %s" % exc
+                    )
+                    return result
+                raise
         rows, names = _read(copy_path)
         age_hours = (datetime.now().timestamp() - stat.st_mtime) / 3600.0
         result.update(
             {
                 "ok": True,
-                "source": str(source),
+                "source": shortcut_url(source) if kind == SHAREPOINT else str(source),
                 "source_mtime": datetime.fromtimestamp(stat.st_mtime)
                 .astimezone()
                 .isoformat(timespec="seconds"),
                 "source_mtime_label": datetime.fromtimestamp(stat.st_mtime).strftime("%d %b %H:%M"),
                 "copy": str(copy_path),
-                "stale": bool(kind == "downloads" and age_hours > stale_hours),
+                "stale": bool(kind in ("downloads", SHAREPOINT) and age_hours > stale_hours),
                 "rows": rows,
                 "names": names,
             }
@@ -607,15 +724,28 @@ def sheet_pending(
 ) -> dict[str, dict]:
     matched = _project_keys(projects)
     taken = _pending_keys(pending)
+    completed = _key_sets({})
+    for row in rows or ():
+        if row.get("tab") == COMPLETED_TAB:
+            for name, values in _key_sets(row.get("keys") or {}).items():
+                completed[name] |= values
+    try:
+        today = datetime.fromisoformat(now_iso).date()
+    except (TypeError, ValueError):
+        today = date.today()
     result: dict[str, dict] = {}
     for row in rows or ():
         if not _has_token(row.get("ae", ""), my_initials):
+            continue
+        if row.get("tab") == COMPLETED_TAB or is_ongoing(row.get("so_status", "")):
+            continue
+        if row.get("tab") == "New" and not _recent(row.get("assigned", ""), today, NEW_ROW_DAYS):
             continue
         group = stage_group(row.get("so_status", ""))
         if group is not None and group >= 4:
             continue
         keys = _key_sets(row.get("keys") or {})
-        if _overlaps(keys, matched) or _overlaps(keys, taken):
+        if _overlaps(keys, matched) or _overlaps(keys, taken) or _overlaps(keys, completed):
             continue
         message_id = _message_id(row)
         if message_id in (pending or {}) or message_id in result:
@@ -652,3 +782,200 @@ def sheet_pending(
             "source": "sheet",
         }
     return result
+
+
+STATUS_STAGES = ((1, 1, "Pre-Kickoff"), (2, 5, "Pre-Fabrication"), (6, 11, "Fabrication"), (12, 12, "System Test"), (13, 99, "Completion"))
+COMPLETION = "Completion"
+SYNC_SOURCE = "tracker sheet"
+RECENT_DAYS = 30
+
+
+def status_stage(status: str) -> str:
+    found = STATUS_NUMBER_RE.match(status or "")
+    if not found:
+        return ""
+    number = int(found.group(1))
+    for low, high, stage in STATUS_STAGES:
+        if low <= number <= high:
+            return stage
+    return ""
+
+
+def is_ongoing(status: str) -> bool:
+    return re.sub(r"[^a-z]", "", str(status or "").lower()) == "ongoing"
+
+
+def is_hold(status: str) -> bool:
+    return str(status or "").strip().lower().startswith("hold")
+
+
+def _parse_day(value) -> date | None:
+    try:
+        return date.fromisoformat(str(value or "")[:10])
+    except ValueError:
+        return None
+
+
+def _recent(value, today: date, days: int) -> bool:
+    day = _parse_day(value)
+    return day is not None and (today - day).days <= days
+
+
+def _rows_by_key(rows: list[dict]) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for row in rows or ():
+        for name in ("so", "qte", "project_no"):
+            for value in (row.get("keys") or {}).get(name) or ():
+                out.setdefault(str(value).upper(), []).append(row)
+    return out
+
+
+def order_state(key: str, rows: list[dict], today: date) -> dict:
+    """What the sheet says about one SO/QTE: state is active, done, hold, ignore, unclear, new or off."""
+    active = [row for row in rows if row.get("tab") == "Active"]
+    if active:
+        status = str(active[0].get("so_status") or "").strip()
+        if is_ongoing(status):
+            return {"state": "ignore", "detail": "On-Going"}
+        if is_hold(status):
+            return {"state": "hold", "detail": "HOLD"}
+        stage = status_stage(status)
+        if stage == COMPLETION:
+            return {"state": "done", "detail": status}
+        if stage:
+            return {"state": "active", "detail": status, "stage": stage}
+        return {"state": "unclear", "detail": status or "Active Projects, no SO status"}
+    if any(row.get("tab") == COMPLETED_TAB for row in rows):
+        return {"state": "done", "detail": "on a Completed tab"}
+    new = [row for row in rows if row.get("tab") == "New" and _recent(row.get("assigned"), today, NEW_ROW_DAYS)]
+    if new:
+        return {"state": "new", "detail": "New Projects, assigned %s" % new[0].get("assigned")}
+    return {"state": "off", "detail": "not on Active Projects"}
+
+
+def sync_proposals(rows: list[dict], projects: list[dict], today: date, order: list[str]) -> list[dict]:
+    """Stage changes the tracker sheet suggests for each project folder (dicts from snapshot.json)."""
+    by_key = _rows_by_key(rows)
+    rank = {stage: index for index, stage in enumerate(order or [])}
+    out: list[dict] = []
+    for project in projects or ():
+        sos = [str(value).upper() for value in project.get("so") or []]
+        keys = sos or [str(value).upper() for value in list(project.get("qte") or []) + [project.get("project_no") or ""] if value]
+        if not keys:
+            continue
+        found = {key: by_key.get(key) or [] for key in keys}
+        if not sos and not any(found.values()):
+            continue
+        states = [(key, order_state(key, found[key], today)) for key in keys]
+        reason = "; ".join("%s: %s" % (key, state["detail"]) for key, state in states)
+        kinds = {state["state"] for _key, state in states}
+        current = str(project.get("stage") or "") or "Unknown"
+        manual = str(project.get("stage_manual") or "")
+        by_hand = bool(manual) and str(project.get("stage_manual_source") or "") != SYNC_SOURCE
+        note = ""
+        actives = [state["stage"] for _key, state in states if state["state"] == "active"]
+        if actives:
+            proposed = min(actives, key=lambda stage: rank.get(stage, 99))
+            checked = current not in rank or rank.get(proposed, 99) >= rank.get(current, -1) or current == COMPLETION
+            if not checked:
+                note = "emails show a later stage"
+        elif kinds & {"hold", "ignore", "unclear", "new"}:
+            continue
+        else:
+            proposed = COMPLETION
+            checked = True
+            if "done" not in kinds and (
+                _recent(project.get("assigned"), today, RECENT_DAYS) or _recent(project.get("last_email"), today, RECENT_DAYS)
+            ):
+                checked = False
+                note = "recent activity: check before completing"
+        if proposed == current:
+            continue
+        if by_hand:
+            checked = False
+            note = "stage set by hand"
+        out.append(
+            {
+                "key": project.get("key") or "",
+                "name": project.get("name") or project.get("key") or "",
+                "customer": project.get("customer") or "",
+                "current": current,
+                "proposed": proposed,
+                "reason": reason,
+                "checked": bool(checked),
+                "note": note,
+            }
+        )
+    out.sort(key=lambda item: (not item["checked"], rank.get(item["proposed"], 99), item["customer"].lower(), item["name"].lower()))
+    return out
+
+
+WEAK_LINK_DAYS = 365
+
+
+def so_suggestions(rows: list[dict], projects: list[dict], today: date) -> list[dict]:
+    """SO numbers the sheet shows for a project's QTE. Ticked when a sheet row lists the QTE and another row with the
+    same Project ID (PRJ-...) lists the SO. Unticked when only the 7-digit project number links them (rows assigned in
+    the last year only), or when the SO already has its own project folder."""
+    by_project_id: dict[str, list[dict]] = {}
+    for row in rows:
+        project_id = str(row.get("project_id") or "").strip().upper()
+        if project_id:
+            by_project_id.setdefault(project_id, []).append(row)
+    owners: dict[str, dict] = {}
+    for project in projects or ():
+        for so in project.get("so") or ():
+            owners.setdefault(str(so).upper(), project)
+    out: list[dict] = []
+    for project in projects or ():
+        qtes = {str(value).upper() for value in project.get("qte") or ()}
+        if not qtes:
+            continue
+        have = {str(value).upper() for value in project.get("so") or ()}
+        dismissed = {str(value).upper() for value in project.get("so_dismissed") or ()}
+        found: dict[str, tuple[bool, str]] = {}
+        for row in rows:
+            keys = row.get("keys") or {}
+            row_qtes = qtes & set(keys.get("qte") or ())
+            if not row_qtes:
+                continue
+            qte = sorted(row_qtes)[0]
+            for so in keys.get("so") or ():
+                found.setdefault(so, (True, "%s and %s are on the same sheet row" % (qte, so)))
+            project_id = str(row.get("project_id") or "").strip().upper()
+            for other in by_project_id.get(project_id) or () if project_id else ():
+                for so in (other.get("keys") or {}).get("so") or ():
+                    found.setdefault(so, (True, "%s and %s share Project ID %s on the sheet" % (qte, so, project_id)))
+        number = str(project.get("project_no") or "")
+        if number and not have:
+            for row in rows:
+                if number not in ((row.get("keys") or {}).get("project_no") or ()):
+                    continue
+                if not _recent(row.get("assigned"), today, WEAK_LINK_DAYS):
+                    continue
+                for so in (row.get("keys") or {}).get("so") or ():
+                    found.setdefault(so, (False, "only the project number %s links %s to this project" % (number, so)))
+        for so, (strong, reason) in sorted(found.items()):
+            if so in have or so in dismissed:
+                continue
+            owner = owners.get(so)
+            note = "" if strong else "check: project number match only"
+            if strong and have:
+                strong = False
+                note = "check: the project already has %s" % ", ".join(sorted(have))
+            if owner is not None and owner.get("key") != project.get("key"):
+                strong = False
+                note = "%s already has its own folder: %s" % (so, owner.get("name") or owner.get("key"))
+            out.append(
+                {
+                    "key": project.get("key") or "",
+                    "name": project.get("name") or project.get("key") or "",
+                    "customer": project.get("customer") or "",
+                    "so": so,
+                    "reason": reason,
+                    "checked": strong,
+                    "note": note,
+                }
+            )
+    out.sort(key=lambda item: (not item["checked"], item["customer"].lower(), item["name"].lower(), item["so"]))
+    return out

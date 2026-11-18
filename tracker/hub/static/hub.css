@@ -171,6 +171,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .side-projects a:hover { background: var(--sidebar-2); text-decoration: none; color: #fff; }
 .side-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.side-ident { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .7; }
 .side-empty { color: var(--sidebar-muted); font-size: 12px; padding: 4px 8px; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; background: var(--st-open); }
@@ -526,6 +528,8 @@ a.chip:hover { text-decoration: none; border-color: var(--accent); color: var(--
 .board { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 16px; align-items: flex-start; }
 .board-col { flex: 0 0 288px; width: 288px; }
 .board-col-personal { flex-basis: 300px; }
+.board-col.is-collapsed { flex: 0 0 170px; width: 170px; }
+.fit-board .board-col.is-collapsed { flex: 0.45 1 0; }
 .board-col-head {
   display: flex;
   align-items: center;
@@ -594,6 +598,7 @@ a.chip:hover { text-decoration: none; border-color: var(--accent); color: var(--
 .card-head { display: flex; align-items: flex-start; gap: 8px; }
 .card-name { font-weight: 600; font-size: 13.5px; color: var(--text); overflow-wrap: anywhere; }
 .card-name:hover { color: var(--accent); text-decoration: none; }
+.card-ident { font-size: 12.5px; font-weight: 500; color: var(--muted); margin-top: 1px; overflow-wrap: anywhere; }
 .card-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .card-next { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
 .card-next .task-row { padding: 4px 0; border-bottom: none; }
@@ -939,3 +944,7 @@ textarea#note-text {
 .archived-list ul { list-style: none; margin: 6px 0 0; padding: 0; }
 .archived-list li { display: flex; align-items: center; gap: 6px; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 2px 0; }
 .archived-list .row-actions { margin-top: 0; }
+.so-input { width: 110px; padding: 3px 6px; font-size: 12px; }
+.so-rename-label { font-weight: 400; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.so-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); font-size: 13px; }
+.sync-so-table { margin-top: 12px; }

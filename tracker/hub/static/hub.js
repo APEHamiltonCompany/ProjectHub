@@ -722,6 +722,12 @@
     if (action === "due-clear") { return clearDue(target); }
     if (action === "due-toggle") { return toggleDue(target); }
     if (action === "task-launch") { return launchTask(target); }
+    if (action === "project-file-open") { return openProjectFile(target); }
+    if (action === "stage-bulk") { return bulkStage(target); }
+    if (action === "sync-preview") { return syncPreview(target); }
+    if (action === "sync-apply") { return syncApply(target); }
+    if (action === "so-add") { return addSo(target); }
+    if (action === "so-dismiss") { return dismissSo(target); }
     if (action === "launch-set") { return setLaunch(target); }
     if (action === "launch-reset") { return resetLaunch(target); }
     if (action === "launch-none") { return clearLaunch(target); }
@@ -756,6 +762,15 @@
   });
 
   document.addEventListener("change", function (event) {
+    var choice = event.target.closest('[data-action="project-file-choose"]');
+    if (choice) { chooseProjectFile(choice); return; }
+    var stageSelect = event.target.closest('[data-action="stage-set"]');
+    if (stageSelect) { setStage(stageSelect); return; }
+    if (event.target.id === "stage-filter") { filterStage(event.target.value); return; }
+    if (event.target.id === "stage-select-all") { selectAllStage(event.target.checked); return; }
+    if (event.target.id === "sync-select-all") { syncSelectAll(event.target.checked); return; }
+    if (event.target.classList && event.target.classList.contains("sync-pick")) { syncCount(); return; }
+    if (event.target.classList && event.target.classList.contains("stage-pick")) { countStagePicks(); return; }
     var cell = event.target.closest(".ts-cell");
     if (!cell) { return; }
     var value = cell.value.trim();
@@ -849,17 +864,42 @@
     tick();
   }
 
+  // {group: option} from the file-choice selects inside scope; null (after a toast) if one is unanswered.
+  function fileChoices(scope) {
+    var choices = {};
+    var selects = scope ? scope.querySelectorAll("select.file-choice") : [];
+    for (var i = 0; i < selects.length; i++) {
+      if (!selects[i].value) {
+        toast("Choose a " + (selects[i].getAttribute("aria-label") || "file").toLowerCase() + " first");
+        selects[i].focus();
+        return null;
+      }
+      choices[selects[i].getAttribute("data-group")] = selects[i].value;
+    }
+    return choices;
+  }
+
+  function createdMessage(data) {
+    var skipped = (data && data.files_skipped) || [];
+    var text = "Created " + data.folder;
+    if (skipped.length) { text += " - not copied: " + skipped.join("; "); }
+    return text + " - building project page\u2026";
+  }
+
   function createPending(button) {
     var messageId = button.getAttribute("data-message-id");
     var input = document.querySelector('.folder-input[data-message-id="' + messageId + '"]');
+    var choices = fileChoices(button.closest(".pending"));
+    if (!choices) { return; }
     busy(button, true);
     toast("Creating project\u2026");
     post("/api/pending/create", {
       message_id: messageId,
-      folder_name: input ? input.value : ""
+      folder_name: input ? input.value : "",
+      choices: choices
     }).then(function (data) {
-      toast("Created " + data.folder + " - building project page\u2026");
-      waitForRefresh(data.key_url, 180000);
+      toast(createdMessage(data));
+      waitForRefresh(data.key_url, (data.files_skipped || []).length ? 8000 : 180000);
     }).catch(function (error) {
       busy(button, false);
       fail(error);
@@ -901,6 +941,8 @@
     };
     var customer = value("customer");
     if (!customer) { toast("Customer is required"); return; }
+    var choices = fileChoices(form);
+    if (!choices) { return; }
     busy(button, true);
     toast("Creating project\u2026");
     post("/api/projects/create", {
@@ -910,10 +952,11 @@
       project_no: value("project_no"),
       description: value("description"),
       level: value("level"),
-      folder_name: value("folder_name")
+      folder_name: value("folder_name"),
+      choices: choices
     }).then(function (data) {
-      toast("Created " + data.folder + " - building project page\u2026");
-      waitForRefresh(data.key_url, 180000);
+      toast(createdMessage(data));
+      waitForRefresh(data.key_url, (data.files_skipped || []).length ? 8000 : 180000);
     }).catch(function (error) {
       busy(button, false);
       fail(error);
@@ -1052,6 +1095,216 @@
 
   function fileName(path) {
     return String(path || "").split(/[\\/]/).pop();
+  }
+
+  function openProjectFile(button) {
+    busy(button, true);
+    post("/api/projects/files/open", {
+      key: button.getAttribute("data-key"),
+      item: button.getAttribute("data-item")
+    }).then(function (data) {
+      busy(button, false);
+      if ((data.created || []).length) {
+        toast("Created " + fileName(data.created[0]));
+        button.textContent = "Open";
+        var row = button.closest(".project-file");
+        var name = row && row.querySelector(".file-name");
+        if (name) { name.textContent = fileName(data.created[0]); }
+      } else {
+        toast("Opened " + fileName(data.launched));
+      }
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function setStage(select) {
+    select.disabled = true;
+    post("/api/projects/stage", { keys: [select.getAttribute("data-key")], stage: select.value }).then(function (data) {
+      toast(data.stage ? "Stage set to " + data.stage : "Stage follows emails again - refreshing\u2026");
+      window.setTimeout(function () { window.location.reload(); }, data.stage ? 400 : 3000);
+    }).catch(function (error) {
+      select.disabled = false;
+      fail(error);
+    });
+  }
+
+  function stageRows() {
+    return Array.prototype.slice.call(document.querySelectorAll("tr.project-row"));
+  }
+
+  function filterStage(value) {
+    stageRows().forEach(function (row) {
+      var show = !value || row.getAttribute("data-stage") === value;
+      row.style.display = show ? "" : "none";
+      if (!show) {
+        var box = row.querySelector(".stage-pick");
+        if (box) { box.checked = false; }
+      }
+    });
+    var all = document.getElementById("stage-select-all");
+    if (all) { all.checked = false; }
+    countStagePicks();
+  }
+
+  function selectAllStage(checked) {
+    stageRows().forEach(function (row) {
+      var box = row.querySelector(".stage-pick");
+      if (box && row.style.display !== "none") { box.checked = checked; }
+    });
+    countStagePicks();
+  }
+
+  function countStagePicks() {
+    var label = document.getElementById("stage-selected-count");
+    if (label) { label.textContent = document.querySelectorAll(".stage-pick:checked").length + " selected"; }
+  }
+
+  function bulkStage(button) {
+    var select = document.getElementById("stage-bulk-value");
+    var keys = Array.prototype.map.call(document.querySelectorAll(".stage-pick:checked"), function (box) {
+      return box.getAttribute("data-key");
+    });
+    if (!keys.length) { toast("Tick the projects to move first"); return; }
+    if (!select || !select.value) { toast("Choose a stage first"); return; }
+    var stage = select.value === "__clear__" ? "" : select.value;
+    busy(button, true);
+    post("/api/projects/stage", { keys: keys, stage: stage }).then(function (data) {
+      var text = "Moved " + data.updated + " project" + (data.updated === 1 ? "" : "s") + (stage ? " to " + stage : " back to following emails");
+      if ((data.failed || []).length) { text += " - failed: " + data.failed.join("; "); }
+      toast(text);
+      window.setTimeout(function () { window.location.reload(); }, (data.failed || []).length ? 6000 : 800);
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function syncCount() {
+    var box = document.getElementById("sync-count");
+    var picked = document.querySelectorAll(".sync-pick:checked").length;
+    var total = document.querySelectorAll(".sync-pick").length;
+    if (box) { box.textContent = picked + " of " + total + " selected"; }
+  }
+
+  function syncSelectAll(checked) {
+    Array.prototype.forEach.call(document.querySelectorAll(".sync-pick:not(.sync-so)"), function (box) { box.checked = checked; });
+    syncCount();
+  }
+
+  function syncPreview(button) {
+    var status = document.getElementById("sync-status");
+    var panel = document.getElementById("sync-preview");
+    var body = document.getElementById("sync-rows");
+    busy(button, true);
+    if (status) { status.textContent = "Reading the Project Tracking sheet\u2026"; }
+    post("/api/tracker-sync/preview", {}).then(function (data) {
+      busy(button, false);
+      var items = data.proposals || [];
+      var sos = data.so_suggestions || [];
+      var sheet = data.sheet || {};
+      var tabs = sheet.tabs || {};
+      var text = "Sheet: " + (tabs.Active || 0) + " active, " + (tabs.Completed || 0) + " completed rows" +
+        (sheet.updated ? " (copy " + sheet.updated + ")" : "") + ". " + items.length + " suggested change" + (items.length === 1 ? "" : "s") + ", " +
+        sos.length + " SO number" + (sos.length === 1 ? "" : "s") + " to add.";
+      if (sheet.warning) { text += " " + sheet.warning; }
+      if (status) { status.textContent = text; }
+      body.innerHTML = items.map(function (item) {
+        return "<tr><td><input type=\"checkbox\" class=\"sync-pick\" data-key=\"" + esc(item.key) + "\" data-stage=\"" + esc(item.proposed) + "\"" +
+          (item.checked ? " checked" : "") + " aria-label=\"Apply " + esc(item.name) + "\"></td>" +
+          "<td><a href=\"/p/" + encodeURIComponent(item.key) + "\">" + esc(item.name) + "</a></td>" +
+          "<td>" + esc(item.customer) + "</td><td>" + esc(item.current) + "</td><td><strong>" + esc(item.proposed) + "</strong></td>" +
+          "<td class=\"small\">" + esc(item.reason) + (item.note ? " <span class=\"badge level\">" + esc(item.note) + "</span>" : "") + "</td></tr>";
+      }).join("");
+      var soBody = document.getElementById("sync-so-rows");
+      var soWrap = document.getElementById("sync-so-wrap");
+      if (soBody) {
+        soBody.innerHTML = sos.map(function (item) {
+          return "<tr><td><input type=\"checkbox\" class=\"sync-pick sync-so\" data-key=\"" + esc(item.key) + "\" data-so=\"" + esc(item.so) + "\"" +
+            (item.checked ? " checked" : "") + " aria-label=\"Add " + esc(item.so) + " to " + esc(item.name) + "\"></td>" +
+            "<td><a href=\"/p/" + encodeURIComponent(item.key) + "\">" + esc(item.name) + "</a></td>" +
+            "<td>" + esc(item.customer) + "</td><td><strong>" + esc(item.so) + "</strong></td>" +
+            "<td class=\"small\">" + esc(item.rename_to || "(no rename)") + "</td>" +
+            "<td class=\"small\">" + esc(item.reason) + (item.note ? " <span class=\"badge level\">" + esc(item.note) + "</span>" : "") + "</td></tr>";
+        }).join("");
+      }
+      if (soWrap) { soWrap.hidden = !sos.length; }
+      panel.hidden = !items.length && !sos.length;
+      var all = document.getElementById("sync-select-all");
+      if (all) { all.checked = false; }
+      syncCount();
+    }).catch(function (error) {
+      busy(button, false);
+      if (status) { status.textContent = ""; }
+      fail(error);
+    });
+  }
+
+  function syncApply(button) {
+    var items = Array.prototype.map.call(document.querySelectorAll(".sync-pick:not(.sync-so):checked"), function (box) {
+      return { key: box.getAttribute("data-key"), stage: box.getAttribute("data-stage") };
+    });
+    var soItems = Array.prototype.map.call(document.querySelectorAll(".sync-so:checked"), function (box) {
+      return { key: box.getAttribute("data-key"), so: box.getAttribute("data-so") };
+    });
+    if (!items.length && !soItems.length) { toast("Tick the suggestions to apply first"); return; }
+    var rename = document.getElementById("sync-rename");
+    busy(button, true);
+    post("/api/tracker-sync/apply", { items: items, so_items: soItems, rename: rename ? rename.checked : true }).then(function (data) {
+      var text = "Updated " + data.updated + " stage" + (data.updated === 1 ? "" : "s");
+      if (data.so_added) { text += ", added " + data.so_added + " SO number" + (data.so_added === 1 ? "" : "s") + ", renamed " + data.renamed + " folder" + (data.renamed === 1 ? "" : "s"); }
+      var notes = (data.warnings || []).concat((data.failed || []).map(function (line) { return "failed: " + line; }));
+      if (notes.length) { text += " - " + notes.join("; "); }
+      toast(text);
+      window.setTimeout(function () { window.location.reload(); }, notes.length ? 8000 : 800);
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function addSo(button) {
+    var input = document.getElementById("so-input");
+    var value = button.getAttribute("data-so") || (input ? input.value : "");
+    if (!/SO[-\s]?\d{6}/i.test(value)) { toast("Enter an SO number like SO-285770"); return; }
+    var rename = document.getElementById("so-rename");
+    busy(button, true);
+    post("/api/projects/so", { key: button.getAttribute("data-key"), so: value, rename: rename ? rename.checked : true }).then(function (data) {
+      var text = "Added " + data.added.join(", ") + (data.renamed ? " - folder renamed to " + data.renamed : "");
+      if ((data.warnings || []).length) { text += " - " + data.warnings.join("; "); }
+      toast(text);
+      window.setTimeout(function () { window.location.href = "/p/" + encodeURIComponent(data.key); }, (data.warnings || []).length ? 6000 : 900);
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function dismissSo(button) {
+    busy(button, true);
+    post("/api/projects/so/dismiss", { key: button.getAttribute("data-key"), so: button.getAttribute("data-so") }).then(function () {
+      var row = button.closest(".so-hint");
+      if (row) { row.parentNode.removeChild(row); }
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function chooseProjectFile(select) {
+    if (!select.value) { return; }
+    select.disabled = true;
+    post("/api/projects/files/choose", {
+      key: select.getAttribute("data-key"),
+      group: select.getAttribute("data-group"),
+      option: select.value
+    }).then(function () {
+      window.location.reload();
+    }).catch(function (error) {
+      select.disabled = false;
+      fail(error);
+    });
   }
 
   function launchTask(button) {
@@ -2151,4 +2404,6 @@
   initZoom();
   initAutoReload();
   initSettings();
+  var stageFilter = document.getElementById("stage-filter");
+  if (stageFilter && stageFilter.value) { filterStage(stageFilter.value); }
 })();

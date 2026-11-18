@@ -1,25 +1,18 @@
 business_days_per_week: 5
+# Board buckets, in order. A stage set by hand on the project page always wins over emails.
+buckets: [Pre-Kickoff, Pre-Fabrication, Fabrication, System Test, Closeout, Completion]
+# Email subject keywords (case and spacing ignored) that move a project into a bucket.
+# Override per user with email_rules in config.yaml (setup.cmd -> Email rules).
+# When a subject matches several, the later bucket wins; ties go to the first listed.
 triggers:
-  - id: assignment
-    stage: Pre-Kickoff
-    subject_regex: '^\s*(RE:|FW:|FWD:)?\s*Project Assignment\s*-'
-    no_reply: true
-  - id: kickoff
-    stage: Design
-    subject_regex: 'kick\s?off'
-  - id: internal_design_review
-    stage: Design Review
-    subject_regex: 'internal\s+(design\s+)?review'
-  - id: design_review
-    stage: Apps Plan
-    subject_regex: 'design\s+review'
-    exclude_regex: 'internal\s+(design\s+)?review'
-  - id: work_order_firm
-    stage: Fabrication/Test
-    subject_regex: 'work\s+order\s+firm|WO\s+firm'
-  - id: closeout
-    stage: Closeout
-    subject_regex: 'close\s?out'
+  - {id: assignment, label: Project assignment, stage: Pre-Kickoff, keywords: ['Project Assignment -'], no_reply: true}
+  - {id: kickoff, label: Kickoff, stage: Pre-Fabrication, keywords: [kickoff, kick off]}
+  - {id: internal_design_review, label: Internal design review, stage: Pre-Fabrication, keywords: [internal design review, internal review]}
+  - {id: design_review, label: Design review, stage: Pre-Fabrication, keywords: [design review]}
+  - {id: work_order_firm, label: Work order firm, stage: Fabrication, keywords: [WO firm, work order firm]}
+  - {id: at_notification, label: A&T notification, stage: System Test, keywords: [A&T Notification]}
+  - {id: closeout, label: Closeout, stage: Closeout, keywords: [closeout, close out]}
+# Checklist groups on the project page (no Fabrication group: nothing to do while a project waits there).
 stages:
   - Pre-Fabrication
   - System Test
@@ -28,14 +21,14 @@ stages:
 workflow:
   - {id: review_cpr_so, stage: Pre-Fabrication, title: "Review CPR/SO in D365", trigger: assignment, offset: 2, launch: 'tool:wire_diagram_builder'}
   - {id: ace_questions, stage: Pre-Fabrication, title: "Kickoff pre-work questions to ACE", trigger: assignment, offset: 2}
-  - {id: time_estimate, stage: Pre-Fabrication, title: "Time estimate + RMT; reply to assignment email with link", trigger: assignment, offset: 2}
-  - {id: adp_start, stage: Pre-Fabrication, title: "Start ADP/APC draft (post to SharePoint)"}
-  - {id: kickoff_meeting, stage: Pre-Fabrication, title: "Kickoff: review CPR, time estimates and demo agreement; update Apps Plan"}
+  - {id: time_estimate, stage: Pre-Fabrication, title: "Time estimate + RMT; reply to assignment email with link", trigger: assignment, offset: 2, launch: 'file:time_estimate'}
+  - {id: adp_start, stage: Pre-Fabrication, title: "Start ADP/APC draft (post to SharePoint)", launch: 'file:project_document'}
+  - {id: kickoff_meeting, stage: Pre-Fabrication, title: "Kickoff: review CPR, time estimates and demo agreement; update Apps Plan", launch: 'file:project_document'}
   - {id: wiring_diagram, stage: Pre-Fabrication, title: "Wiring diagram (.jpg to ME, .drawio to project page)", trigger: kickoff, offset: 1, launch: 'tool:wire_diagram_builder'}
-  - {id: test_matrix, stage: Pre-Fabrication, title: "Test matrix in design review slides", trigger: internal_design_review, offset: 1}
-  - {id: design_review, stage: Pre-Fabrication, title: "Design review: present wiring diagram + test matrix; update RMT"}
-  - {id: apps_plan, stage: Pre-Fabrication, title: "Finish Apps Plan, send to ACE, post SO parts excel, email PM", trigger: design_review, offset: 5}
-  - {id: parts_for_testing, stage: Pre-Fabrication, title: "Parts Required for Testing list; email PC/PM/ME", trigger: work_order_firm, offset: 5, launch: 'template:parts_request'}
+  - {id: test_matrix, stage: Pre-Fabrication, title: "Test matrix in design review slides", trigger: internal_design_review, offset: 1, launch: 'file:test_matrix'}
+  - {id: design_review, stage: Pre-Fabrication, title: "Design review: present wiring diagram + test matrix; update RMT", launch: 'file:test_matrix'}
+  - {id: apps_plan, stage: Pre-Fabrication, title: "Finish Apps Plan, send to ACE, post SO parts excel, email PM", trigger: design_review, offset: 5, launch: 'file:project_document'}
+  - {id: parts_for_testing, stage: Pre-Fabrication, title: "Parts Required for Testing list; email PC/PM/ME", trigger: work_order_firm, offset: 5, launch: 'file:parts_request'}
   - {id: app_dev, stage: System Test, title: "Preliminary applications development (controllers, simulated apps)"}
   - {id: system_setup, stage: System Test, title: "System setup: unpack, photos, Vendor Device Cable sheet, Multiflex"}
   - {id: device_testing, stage: System Test, title: "Device handoff and functionality testing"}
@@ -49,7 +42,7 @@ workflow:
   - {id: co_support_docs, stage: Closeout, title: "Integration support documents posted"}
   - {id: co_parts_list, stage: Closeout, title: "Parts list entry updated and complete"}
   - {id: co_software, stage: Closeout, title: "Device controller / installers published (when applicable)"}
-  - {id: co_adp_results, stage: Closeout, title: "Apps Plan (ADP) completed with results"}
+  - {id: co_adp_results, stage: Closeout, title: "Apps Plan (ADP) completed with results", launch: 'file:project_document'}
   - {id: co_uv, stage: Closeout, title: "UV reports posted (when applicable)"}
   - {id: co_wiki, stage: Closeout, title: "Device wiki pages updated (when applicable)"}
   - {id: co_fat_templates, stage: Closeout, title: "FAT HW test templates updated (when applicable)"}

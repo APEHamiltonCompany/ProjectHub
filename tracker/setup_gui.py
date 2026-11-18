@@ -18,6 +18,7 @@ EXAMPLE_PATH = HERE / "config.example.yaml"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tracker import rules as rules_mod  # noqa: E402
 from tracker import setup_wizard  # noqa: E402
 from tracker.matcher import LAYOUT_CUSTOMER, LAYOUTS  # noqa: E402
 from tracker.sources import resolve_folder  # noqa: E402
@@ -50,6 +51,31 @@ def _csv(items) -> str:
     return ", ".join(str(item) for item in items or [])
 
 
+SCOPE_LABELS = {"mailbox": "Whole mailbox", "folders": "Specific folders"}
+
+
+def _rules_path(cfg: dict) -> Path:
+    path = Path(cfg.get("rules_path") or (HERE / "rules.yaml"))
+    return path if path.is_file() else HERE / "rules.yaml"
+
+
+def default_rules(cfg: dict) -> dict:
+    return rules_mod.load_rules(_rules_path(cfg))
+
+
+def email_rule_rows(triggers: list[dict]) -> list[dict]:
+    return [
+        {
+            "id": str(t.get("id") or ""),
+            "label": str(t.get("label") or t.get("id") or ""),
+            "stage": str(t.get("stage") or ""),
+            "keywords": ", ".join(rules_mod.split_keywords(t.get("keywords"))),
+        }
+        for t in triggers or []
+        if t.get("id")
+    ]
+
+
 def form_from_config(cfg: dict) -> dict:
     outlook = cfg.get("outlook_com") or {}
     ape = cfg.get("ape_sheet") or {}
@@ -64,10 +90,15 @@ def form_from_config(cfg: dict) -> dict:
         "folder_layout": str(cfg.get("project_folder_layout") or LAYOUT_CUSTOMER),
         "personal_tasks_path": str(cfg.get("personal_tasks_path") or ""),
         "time_estimate_template": str(cfg.get("time_estimate_template") or ""),
+        "templates_root": str(cfg.get("templates_root") or ""),
         "eml_folders": [str(item) for item in cfg.get("eml_folders") or []],
         "scan_project_folders": bool(cfg.get("scan_project_folders", False)),
         "outlook_enabled": bool(outlook.get("enabled", False)),
         "outlook_folders": _csv(outlook.get("folders") or ["Inbox"]),
+        "outlook_scope": SCOPE_LABELS.get(str(outlook.get("scope") or "mailbox").lower(), SCOPE_LABELS["mailbox"]),
+        "skip_folders": _csv(outlook.get("skip_folders")),
+        "email_rules": email_rule_rows(rules_mod.load_rules(_rules_path(cfg), cfg)["triggers"]),
+        "buckets": [str(b) for b in default_rules(cfg).get("buckets") or []],
         "outlook_calendar": bool(outlook.get("calendar", False)),
         "days_back": str(outlook.get("days_back") or 120),
         "ape_enabled": bool(ape.get("enabled", True)),
@@ -149,10 +180,18 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
     elif vault:
         cfg["personal_tasks_path"] = vault + "/My Tasks.md"
 
+    templates_root = _path(form.get("templates_root", ""))
+    has_project_files = isinstance(cfg.get("project_files"), dict)
+    if templates_root and not Path(templates_root).is_dir():
+        warnings.append("Template folder not found (template files will be skipped until it is reachable): %s" % templates_root)
+    elif not templates_root and has_project_files:
+        warnings.append("No template folder: new projects will not get template files.")
+    cfg["templates_root"] = templates_root
+
     template = _path(form["time_estimate_template"])
     if template and not Path(template).is_file():
         errors.append("Time estimate template not found: %s" % template)
-    elif not template:
+    elif not template and not has_project_files:
         warnings.append("No time estimate template: new projects will not get a TimeEstimates.xlsx copy.")
     cfg["time_estimate_template"] = template
 
@@ -166,6 +205,14 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
     outlook = dict(cfg.get("outlook_com") or {})
     outlook["enabled"] = bool(form["outlook_enabled"])
     outlook["folders"] = _split(form["outlook_folders"]) or ["Inbox"]
+    scope = {label.lower(): key for key, label in SCOPE_LABELS.items()}.get(
+        str(form.get("outlook_scope") or "").strip().lower(), str(form.get("outlook_scope") or "mailbox").strip().lower()
+    )
+    if scope not in SCOPE_LABELS:
+        errors.append("Outlook search must be Whole mailbox or Specific folders.")
+        scope = "mailbox"
+    outlook["scope"] = scope
+    outlook["skip_folders"] = _split(form.get("skip_folders", ""))
     outlook["calendar"] = bool(form["outlook_calendar"])
     days = _int(form["days_back"], "Days of email history", errors, 1, 3650)
     if days is not None:
@@ -173,6 +220,23 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
     cfg["outlook_com"] = outlook
     if not outlook["enabled"] and not folders and not cfg["scan_project_folders"]:
         warnings.append("No email source is enabled: the tracker will not find any assignment emails.")
+
+    if "email_rules" in form:
+        defaults = default_rules(cfg)
+        buckets = [str(b) for b in defaults.get("buckets") or []]
+        rows = []
+        for row in form["email_rules"]:
+            keywords = rules_mod.split_keywords(row.get("keywords"))
+            stage = str(row.get("stage") or "").strip()
+            if buckets and stage not in buckets:
+                errors.append("Email rule \"%s\": choose a bucket (%s)." % (row.get("label") or row.get("id"), ", ".join(buckets)))
+            if not keywords:
+                warnings.append("Email rule \"%s\" has no keywords: those emails will not move projects." % (row.get("label") or row.get("id")))
+            rows.append({"id": row["id"], "label": row.get("label") or row["id"], "stage": stage, "keywords": keywords})
+        if rows == [dict(r, keywords=rules_mod.split_keywords(r["keywords"])) for r in email_rule_rows(defaults["triggers"])]:
+            cfg.pop("email_rules", None)
+        else:
+            cfg["email_rules"] = rows
 
     ape = dict(cfg.get("ape_sheet") or {})
     ape["enabled"] = bool(form["ape_enabled"])
@@ -345,8 +409,13 @@ def run_ui() -> None:
         "Markdown file for non-project tasks; created if missing. Blank = <vault>/My Tasks.md.", "md",
     )
     row = entry(
-        folders, row, "time_estimate_template", "TimeEstimates template",
-        "Optional. Excel file copied into each new project folder.", "xlsx",
+        folders, row, "templates_root", "Template folder",
+        "Folder with the project templates (TimeEstimates, Parts Request, test matrix, ...), e.g. R:/APE_AE/TEMPLATES.\n"
+        "Which files are copied is set under project_files in config.yaml.", "dir",
+    )
+    row = entry(
+        folders, row, "time_estimate_template", "TimeEstimates template (legacy)",
+        "Only used when config.yaml has no project_files section.", "xlsx",
     )
     entry(
         folders, row, "wire_diagram_builder", "WireDiagramBuilder.exe",
@@ -379,11 +448,48 @@ def run_ui() -> None:
         mail, row, "outlook_enabled", "Read classic Outlook (read-only)",
         "Requires classic Outlook (not \"New Outlook\") signed in on this PC.",
     )
-    row = entry(mail, row, "outlook_folders", "Outlook folders", "Comma-separated, e.g. Inbox, Inbox/Projects")
+    variables["outlook_scope"] = tk.StringVar(value=form["outlook_scope"])
+    ttk.Label(mail, text="Outlook search").grid(row=row, column=0, sticky="w", padx=(0, 8))
+    ttk.Combobox(
+        mail, textvariable=variables["outlook_scope"], values=list(SCOPE_LABELS.values()), state="readonly", width=18
+    ).grid(row=row, column=1, sticky="w")
+    hint(
+        mail, row + 1,
+        "Whole mailbox: every mail folder incl. Sent Items (Junk, Deleted Items, Drafts and Outbox are always skipped).\n"
+        "Specific folders: only the Outlook folders listed below.",
+    )
+    row += 2
+    row = entry(
+        mail, row, "skip_folders", "Skip folders",
+        "Whole mailbox only. Comma-separated folder names or paths to skip, e.g. Graymail, Inbox/IT Announcements.",
+    )
+    row = entry(mail, row, "outlook_folders", "Outlook folders", "Specific folders only. Comma-separated, e.g. Inbox, Inbox/Projects")
     row = check(mail, row, "outlook_calendar", "Read Outlook calendar (kickoff and other meetings)")
     entry(mail, row, "days_back", "Days of history", "How many days back emails and calendar items are read.")
 
-    ape = section("4. APE Project Tracking sheet")
+    rules_frame = section("4. Email rules (which emails move a project to which bucket)")
+    ttk.Label(rules_frame, text="Email").grid(row=0, column=0, sticky="w", padx=(0, 8))
+    ttk.Label(rules_frame, text="Bucket").grid(row=0, column=1, sticky="w")
+    ttk.Label(rules_frame, text="Subject keywords (comma-separated)").grid(row=0, column=2, sticky="w", padx=(6, 0))
+    rules_frame.columnconfigure(2, weight=1)
+    rule_rows = form["email_rules"]
+    for index, rule in enumerate(rule_rows, start=1):
+        variables["rule_stage:" + rule["id"]] = tk.StringVar(value=rule["stage"])
+        variables["rule_keywords:" + rule["id"]] = tk.StringVar(value=rule["keywords"])
+        ttk.Label(rules_frame, text=rule["label"]).grid(row=index, column=0, sticky="w", padx=(0, 8))
+        ttk.Combobox(
+            rules_frame, textvariable=variables["rule_stage:" + rule["id"]], values=form["buckets"], state="readonly", width=16
+        ).grid(row=index, column=1, sticky="w")
+        ttk.Entry(rules_frame, textvariable=variables["rule_keywords:" + rule["id"]]).grid(
+            row=index, column=2, sticky="ew", padx=(6, 0)
+        )
+    hint(
+        rules_frame, len(rule_rows) + 1,
+        "Case and spacing are ignored; replies and forwards don't count. If a subject matches several rules, the later\n"
+        "bucket wins. A bucket you set by hand on a project page always wins over emails. Completion is set by hand.",
+    )
+
+    ape = section("5. APE Project Tracking sheet")
     row = check(ape, 0, "ape_enabled", "Use the APE Project Tracking workbook (read-only)")
     row = check(
         ape, row, "ape_auto_find", "Find a OneDrive-synced copy automatically",
@@ -441,6 +547,15 @@ def run_ui() -> None:
     def current_form() -> dict:
         values = {key: var.get() for key, var in variables.items()}
         values["eml_folders"] = list(email_list.get(0, "end"))
+        values["email_rules"] = [
+            {
+                "id": rule["id"],
+                "label": rule["label"],
+                "stage": variables["rule_stage:" + rule["id"]].get(),
+                "keywords": variables["rule_keywords:" + rule["id"]].get(),
+            }
+            for rule in rule_rows
+        ]
         values["holidays"] = texts["holidays"].get("1.0", "end")
         return values
 

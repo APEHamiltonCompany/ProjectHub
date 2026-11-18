@@ -24,7 +24,7 @@
     <div class="side-label">Projects</div>
     <ul class="side-projects">
       {% for row in nav_projects %}
-      <li><a href="{{ url_for('project_page', key=row.key) }}" title="{{ row.name }}"><span class="dot dot-{{ row.health }}"></span><span class="side-name">{{ row.name }}</span></a></li>
+      <li><a href="{{ url_for('project_page', key=row.key) }}" title="{{ row.label }} - folder {{ row.name }}"><span class="dot dot-{{ row.health }}"></span><span class="side-text"><span class="side-name">{{ row.customer or row.ident }}</span>{% if row.customer %}<span class="side-ident">{{ row.ident }}</span>{% endif %}</span></a></li>
       {% else %}
       <li class="side-empty">none yet</li>
       {% endfor %}
@@ -85,7 +85,7 @@
       <label class="field"><span>Due date</span><input type="date" id="nt-due"></label>
       <label class="field" id="nt-key-field"{% if project is not defined %} hidden{% endif %}><span>Project</span>
         <select id="nt-key">
-          {% for row in nav_projects %}<option value="{{ row.key }}"{% if project is defined and project.key == row.key %} selected{% endif %}>{{ row.name }}</option>{% endfor %}
+          {% for row in nav_projects %}<option value="{{ row.key }}"{% if project is defined and project.key == row.key %} selected{% endif %}>{{ row.label }}</option>{% endfor %}
         </select>
       </label>
     </div>

@@ -1,0 +1,17 @@
+{# Dropdowns for template file groups (test matrix, project document) shown when creating a project. #}
+{% macro file_choice_selects(file_groups, level="") %}
+{% if file_groups %}
+<div class="row file-choices">
+  {% for group in file_groups %}
+  <label class="small">{{ group.label }}
+    <select class="file-choice" data-group="{{ group.id }}" aria-label="{{ group.label }}">
+      <option value="">Choose...</option>
+      {% for option in group.options %}<option value="{{ option.id }}">{{ option.label }}</option>{% endfor %}
+      {% if group.none_allowed %}<option value="none">None</option>{% endif %}
+    </select>
+  </label>
+  {% endfor %}
+  {% if level %}<span class="small muted">level {{ level }}</span>{% endif %}
+</div>
+{% endif %}
+{% endmacro %}

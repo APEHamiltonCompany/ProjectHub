@@ -440,7 +440,7 @@ class CreateProjectTests(unittest.TestCase):
             self.assertEqual(text.count("- [ ] Review the pipettor configuration"), 1)
             self.assertEqual(text.count("- [ ] Confirm all custom parts"), 1)
             self.assertIn("sharepoint: \"https://example.com/exact\"", text)
-            self.assertTrue((folder / "06NOV2026_TimeEstimates.xlsx").is_file())
+            self.assertTrue((folder / "TimeEstimates SO-296266.xlsx").is_file())
             self.assertEqual(len(info["files_created"]), 2)
             self.assertEqual(entry["status"], "created")
 

@@ -44,6 +44,26 @@ def strip_assignment_prefix(subject: str) -> str:
     return text
 
 
+def addressed_to_me(to: str, me: dict | None) -> Optional[bool]:
+    """True when the To line names me (email, "First Last" or "Last, First"); None if I am not configured."""
+    name = re.sub(r"\s+", " ", str((me or {}).get("name") or "")).strip().lower()
+    email = str((me or {}).get("email") or "").strip().lower()
+    if not name and not email:
+        return None
+    line = re.sub(r"\s+", " ", str(to or "")).lower()
+    if email and email in line:
+        return True
+    if name:
+        if re.search(r"(^|[;,<\"'(]\s*)%s(\s*$|\s*[;,>\"')])" % re.escape(name), line):
+            return True
+        parts = name.split(" ")
+        if len(parts) > 1:
+            flipped = "%s, %s" % (parts[-1], " ".join(parts[:-1]))
+            if flipped in line:
+                return True
+    return False
+
+
 def parse_assignment_subject(subject: str) -> dict:
     text = strip_assignment_prefix(subject).strip().strip("*").strip()
     parts = [p.strip() for p in text.split("|")]
@@ -116,8 +136,14 @@ def project_from_folder(folder: str | Path, customer: str = "") -> Project:
         if data:
             project.customer = str(data.get("customer") or "")
             project.level = str(data.get("level") or "")
-            project.stage = str(data.get("stage") or "Unknown")
+            project.stage_manual = str(data.get("stage_manual") or "").strip()
+            project.stage_manual_source = str(data.get("stage_manual_source") or "").strip() if project.stage_manual else ""
+            project.stage = project.stage_manual or str(data.get("stage") or "Unknown")
             project.assigned = str(data.get("assigned") or "")
+            project.id_prefix = str(data.get("id_prefix") or "").strip()
+            project.so_dismissed = sorted(
+                {key for value in data.get("so_dismissed") or [] for key in extract_keys(str(value))["so"]}
+            )
             pn = data.get("project_no")
             if pn:
                 keys["project_no"] |= set(extract_keys(str(pn))["project_no"]) or {str(pn)}

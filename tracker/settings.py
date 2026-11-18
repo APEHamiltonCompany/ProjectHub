@@ -40,6 +40,36 @@ def save_overlay(path: str | Path, data: dict) -> None:
         raise
 
 
+def unc_path(text: str) -> str:
+    """'R:/x' -> '\\\\server\\share\\x' when R: is a mapped network drive that this process can't see
+    (scheduled tasks and background processes often start before mapped drives reconnect). Else ''."""
+    if os.name != "nt" or len(text) < 3 or text[1] != ":" or text[2] not in "\\/" or not text[0].isalpha():
+        return ""
+    if os.path.exists(text[:3]):
+        return ""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Network\\" + text[0].upper()) as key:
+            remote = str(winreg.QueryValueEx(key, "RemotePath")[0] or "").strip().rstrip("\\/")
+    except OSError:
+        return ""
+    if not remote:
+        return ""
+    return remote + "\\" + text[3:].replace("/", "\\")
+
+
+def resolve_drives(value):
+    """Swap disconnected mapped-drive paths in a loaded config for their UNC form (in memory only)."""
+    if isinstance(value, dict):
+        return {key: resolve_drives(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [resolve_drives(item) for item in value]
+    if isinstance(value, str):
+        return unc_path(value) or value
+    return value
+
+
 def apply_overlay(cfg: dict, overlay: dict) -> dict:
     merged = dict(cfg or {})
     hub = dict(merged.get("hub") or {})

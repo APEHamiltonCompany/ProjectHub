@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 from datetime import date, datetime
 from pathlib import Path
 
-from . import matcher, notes
+from . import matcher, notes, project_files
 from . import rules as rules_mod
 from .models import Email, Project
 
@@ -140,7 +139,15 @@ def create_from_pending(
     pending: dict,
     folder_name: str | None = None,
     dry_run: bool = False,
+    choices: dict | None = None,
 ) -> dict:
+    """choices: {group: item id | "none"} picked in the hub; None (automatic creation) copies only the
+    always-copied files and adds a task to pick the rest on the project page."""
+    picked: dict[str, str] | None = None
+    if choices is not None:
+        picked, errors = project_files.validate_choices(cfg, choices)
+        if errors:
+            raise ValueError("; ".join(errors))
     vault = Path(cfg.get("vault") or "")
     raw = folder_name or suggested_folder(cfg, pending)
     parts = matcher.split_folder(raw)
@@ -171,7 +178,7 @@ def create_from_pending(
         stage="Pre-Kickoff",
     )
     if dry_run:
-        return {"folder": str(folder), "note_path": str(note_path), "files_created": []}
+        return {"folder": str(folder), "note_path": str(note_path), "files_created": [], "files_skipped": []}
 
     files_created: list[str] = []
     notes.lp(folder).mkdir(parents=True, exist_ok=True)
@@ -182,14 +189,14 @@ def create_from_pending(
     )
     files_created.append(str(note_path))
 
-    template_xlsx = Path(cfg.get("time_estimate_template") or "")
-    if str(template_xlsx) and notes.lp(template_xlsx).is_file():
-        target = folder / (when.strftime("%d%b%Y").upper() + "_TimeEstimates.xlsx")
-        shutil.copy2(notes.lp(template_xlsx), notes.lp(target))
-        files_created.append(str(target))
+    tokens = project_files.tokens_for(project.customer, project.so, project.qte, project.project_no)
+    copied, skipped = project_files.copy_files(
+        cfg, folder, tokens, project_files.selected_items(cfg, picked)
+    )
+    files_created.extend(copied)
 
     rules_path = Path(cfg.get("rules_path") or (HERE / "rules.yaml"))
-    rules = rules_mod.load_rules(rules_path)
+    rules = rules_mod.load_rules(rules_path, cfg)
     holidays = rules_mod.parse_holidays(cfg.get("holidays") or [])
     from .tracker import build_tasks
 
@@ -202,8 +209,150 @@ def create_from_pending(
         date.today(),
         stages=rules_mod.workflow_stages(rules),
     )
+    _record_file_choices(cfg, note_path, picked)
     pending["status"] = "created"
-    return {"folder": str(folder), "note_path": str(note_path), "files_created": files_created}
+    return {
+        "folder": str(folder),
+        "note_path": str(note_path),
+        "files_created": files_created,
+        "files_skipped": skipped,
+    }
+
+
+def _record_file_choices(cfg: dict, note_path: str | Path, picked: dict[str, str] | None) -> None:
+    """Store the hub's picks in the note, or add a task to pick them when created automatically."""
+    if not project_files.specs(cfg)[1]:
+        return
+    from .hub import tasks as tasks_mod
+
+    text, newline, bom, encoding = notes.read_text(note_path)
+    if picked:
+        data, _raw, body = notes.split_frontmatter(text)
+        data = notes.merge_frontmatter(data, project_files.frontmatter_values(cfg, picked))
+        text = notes.dump_frontmatter(data) + body
+    elif picked is None:
+        line = tasks_mod.manual_line(project_files.pick_message(cfg), date.today(), tasks_mod.new_manual_id())
+        text = tasks_mod.insert_manual(text, [line])
+    notes.write_text(note_path, text, newline, bom, encoding)
+
+
+STAGE_MANUAL_KEY = "stage_manual"
+UNKNOWN_STAGE = "Unknown"
+
+
+def note_path_for_folder(folder: str | Path) -> Path:
+    folder = Path(folder)
+    return folder / (folder.name + ".md")
+
+
+def create_note_for_folder(folder: str | Path, customer: str = "", dry_run: bool = False) -> tuple[Path, bool]:
+    """Minimal project note for an existing folder that has none: (path, created). Never overwrites.
+
+    The customer is the customer folder (customer/so layout) or the start of the folder name; SO, QTE and
+    project number come from the folder name. Stage starts as Unknown and there are no workflow tasks
+    until matching emails arrive."""
+    folder = Path(folder)
+    existing = matcher.select_note(folder)
+    if existing:
+        return Path(existing), False
+    project = matcher.project_from_folder(folder, customer)
+    path = note_path_for_folder(folder)
+    if dry_run:
+        return path, True
+    data = {
+        "project_no": project.project_no,
+        "so": project.so,
+        "qte": project.qte,
+        "customer": project.customer,
+        "level": "",
+        "stage": UNKNOWN_STAGE,
+        "assigned": "",
+        "sharepoint": "",
+        "cpr": "",
+        "rmt": "",
+        "ship_date": "",
+        "design_need_by": "",
+        "team": [],
+    }
+    text = notes.dump_frontmatter(data) + "\n**TO DO:** (Mark done items with #)\n"
+    with open(notes.lp(path), "x", encoding="utf-8", newline="\r\n") as fh:
+        fh.write(text)
+    return path, True
+
+
+def set_manual_stage(note_path: str | Path, stage: str, source: str = "") -> None:
+    """Pin the project's bucket (wins over emails); an empty stage clears the pin. source records who set it
+    (empty = by hand, "tracker sheet" = Sync to Project Tracker)."""
+    text, newline, bom, encoding = notes.read_text(note_path)
+    data, _raw, body = notes.split_frontmatter(text)
+    data = dict(data) if isinstance(data, dict) else {}
+    if stage:
+        data[STAGE_MANUAL_KEY] = stage
+        data["stage"] = stage
+        if source:
+            data[STAGE_MANUAL_KEY + "_source"] = source
+        else:
+            data.pop(STAGE_MANUAL_KEY + "_source", None)
+    else:
+        data.pop(STAGE_MANUAL_KEY, None)
+        data.pop(STAGE_MANUAL_KEY + "_source", None)
+    notes.write_text(note_path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
+
+
+def id_prefix_for(project_no: str, key: str) -> str:
+    """The task-id prefix a project gets by default (see tracker.task_prefix)."""
+    if project_no:
+        return "p" + project_no
+    slug = re.sub(r"[^a-z0-9]", "", str(key or "").lower())
+    return "p" + (slug or "project")
+
+
+def so_folder_name(name: str, sos: list[str], layout: str = matcher.LAYOUT_FLAT) -> str:
+    """Folder name once a QTE project gets its SO(s): "QTE-054686" -> "SO-285770 (QTE-054686)".
+    Flat layout: "Customer QTE-054686 0207777" -> "Customer SO-285770 (QTE-054686) 0207777".
+    "" when no rename is needed (no SO, the name already shows an SO, or no QTE to wrap in the flat layout)."""
+    if not sos or matcher.extract_keys(name)["so"]:
+        return ""
+    label = ", ".join(sos)
+    if layout == matcher.LAYOUT_CUSTOMER:
+        return matcher.sanitize_name("%s (%s)" % (label, name))
+    found = list(matcher.QTE_RE.finditer(name))
+    if not found:
+        return ""
+    start, end = found[0].start(), found[-1].end()
+    return matcher.sanitize_name("%s%s (%s)%s" % (name[:start], label, name[start:end], name[end:]))
+
+
+def add_so(note_path: str | Path, sos: list[str], id_prefix: str = "") -> list[str]:
+    """Add SO numbers to the note's so: list (QTE numbers stay, so old emails still match). id_prefix, when given
+    and none is stored yet, pins the task-id prefix so existing task ids survive the key change. Returns the new list."""
+    text, newline, bom, encoding = notes.read_text(note_path)
+    data, _raw, body = notes.split_frontmatter(text)
+    data = dict(data) if isinstance(data, dict) else {}
+    current = {key for value in data.get("so") or [] for key in matcher.extract_keys(str(value))["so"]}
+    merged = sorted(current | set(sos))
+    data["so"] = merged
+    if id_prefix and not str(data.get("id_prefix") or "").strip():
+        data["id_prefix"] = id_prefix
+    dismissed = [value for value in data.get("so_dismissed") or [] if str(value) not in sos]
+    if dismissed:
+        data["so_dismissed"] = dismissed
+    else:
+        data.pop("so_dismissed", None)
+    notes.write_text(note_path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
+    return merged
+
+
+def dismiss_so(note_path: str | Path, so: str) -> None:
+    """Stop suggesting this SO for the project."""
+    text, newline, bom, encoding = notes.read_text(note_path)
+    data, _raw, body = notes.split_frontmatter(text)
+    data = dict(data) if isinstance(data, dict) else {}
+    dismissed = [str(value) for value in data.get("so_dismissed") or []]
+    if so not in dismissed:
+        dismissed.append(so)
+    data["so_dismissed"] = sorted(dismissed)
+    notes.write_text(note_path, notes.dump_frontmatter(data) + body, newline, bom, encoding)
 
 
 def _link_values(pending: dict) -> dict:
@@ -258,7 +407,7 @@ def link_pending(cfg: dict, pending: dict, folder_path: str | Path) -> dict:
     )
 
     rules_path = Path(cfg.get("rules_path") or (HERE / "rules.yaml"))
-    rules = rules_mod.load_rules(rules_path)
+    rules = rules_mod.load_rules(rules_path, cfg)
     holidays = rules_mod.parse_holidays(cfg.get("holidays") or [])
     from .tracker import build_tasks
 

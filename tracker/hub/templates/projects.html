@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% from "_file_choices.html" import file_choice_selects with context %}
 {% block title %}Projects - Project Hub{% endblock %}
 {% block page_title %}Projects{% endblock %}
 {% block content %}
 
 <section class="panel">
   <div class="panel-head"><h2>Create project manually</h2></div>
-  <p class="small muted">Creates the project folder, note and time-estimate sheet from the template. Add links (SharePoint, email, etc.) on the project page afterwards.</p>
+  <p class="small muted">Creates the project folder, note and the template files (time estimate, parts request, and the test matrix / project document you pick). Add links (SharePoint, email, etc.) on the project page afterwards.</p>
   <form id="manual-project" autocomplete="off" data-layout="{{ folder_layout }}">
     <div class="manual-grid">
       <label><span>Customer</span><input type="text" name="customer" required></label>
@@ -23,6 +24,7 @@
       </label>
       <label><span>Folder name</span><input type="text" name="folder_name" placeholder="auto from customer / SO / project #"></label>
     </div>
+    {{ file_choice_selects(file_groups) }}
     <button type="button" class="btn primary" data-action="manual-create">Create project</button>
   </form>
 </section>
@@ -45,22 +47,75 @@
   {% endif %}
 </section>
 
+<section class="panel" id="tracker-sync">
+  <div class="panel-head"><h2>Sync to Project Tracker</h2></div>
+  <p class="small muted">Reads the APE Project Tracking sheet (takes about a minute) and suggests a stage for each folder from its SO Status. Status 13, a Completed tab, or no longer on Active Projects means Completion; HOLD and On-Going are left alone. It also suggests SO numbers for QTE folders whose quote became an SO. Nothing changes until you click Apply.</p>
+  <button type="button" class="btn" data-action="sync-preview">Sync to Project Tracker</button>
+  <span class="small muted" id="sync-status"></span>
+  <div id="sync-preview" hidden>
+    <div class="row stage-bulk">
+      <button type="button" class="btn primary small" data-action="sync-apply">Apply selected</button>
+      <span class="small muted" id="sync-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="projects-table">
+        <thead>
+          <tr><th><input type="checkbox" id="sync-select-all" aria-label="Select all suggestions"></th><th>Project</th><th>Customer</th><th>Now</th><th>Suggested</th><th>Why</th></tr>
+        </thead>
+        <tbody id="sync-rows"></tbody>
+      </table>
+    </div>
+    <div id="sync-so-wrap" class="sync-so-table" hidden>
+      <div class="row stage-bulk">
+        <strong>SO numbers for QTE projects</strong>
+        <label class="small"><input type="checkbox" id="sync-rename" checked> also rename folders to "SO-&hellip; (QTE-&hellip;)"</label>
+      </div>
+      <div class="table-wrap">
+        <table class="projects-table">
+          <thead>
+            <tr><th></th><th>Project</th><th>Customer</th><th>Add SO</th><th>New folder name</th><th>Why</th></tr>
+          </thead>
+          <tbody id="sync-so-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="panel">
   <div class="panel-head"><h2>Projects</h2><span class="small muted">{{ rows|length }}</span></div>
+  <div class="row stage-bulk">
+    <label class="small">Show
+      <select id="stage-filter" aria-label="Show stage">
+        <option value="">All stages</option>
+        {% for name in rows|map(attribute="stage")|unique|sort %}<option value="{{ name }}"{% if name == stage_filter %} selected{% endif %}>{{ name or "Unknown" }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="small">Move selected to
+      <select id="stage-bulk-value" aria-label="Move selected to">
+        <option value="">Choose...</option>
+        {% for bucket in buckets %}<option value="{{ bucket }}">{{ bucket }}</option>{% endfor %}
+        <option value="__clear__">Follow emails (clear)</option>
+      </select>
+    </label>
+    <button type="button" class="btn small" data-action="stage-bulk">Set stage</button>
+    <span class="small muted" id="stage-selected-count">0 selected</span>
+  </div>
   <div class="table-wrap">
     <table class="projects-table">
       <thead>
         <tr>
-          <th>Project</th><th>Customer</th><th>SO/QTE</th><th>Stage</th><th>Open</th><th>Last email</th><th>Folder</th><th></th>
+          <th><input type="checkbox" id="stage-select-all" aria-label="Select all shown"></th><th>Project</th><th>Customer</th><th>SO/QTE</th><th>Stage</th><th>Open</th><th>Last email</th><th>Folder</th><th></th>
         </tr>
       </thead>
       <tbody>
       {% for row in rows %}
-        <tr>
+        <tr class="project-row" data-stage="{{ row.stage }}">
+          <td><input type="checkbox" class="stage-pick" data-key="{{ row.key }}" aria-label="Select {{ row.name }}"></td>
           <td><a href="{{ url_for('project_page', key=row.key) }}">{{ row.name }}</a><div class="small muted">{{ row.project_no }}</div></td>
           <td>{{ row.customer }}</td>
           <td class="nowrap">{{ row.ident }}</td>
-          <td>{{ row.stage }}</td>
+          <td>{{ row.stage }}{% if row.stage_manual %} <span class="small muted" title="Set by hand">(manual)</span>{% endif %}</td>
           <td class="nowrap">{{ row.open_count }}</td>
           <td class="nowrap">{{ row.last_email }}</td>
           <td class="small muted">{{ row.folder }}</td>

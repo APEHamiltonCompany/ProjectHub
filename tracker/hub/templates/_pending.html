@@ -1,3 +1,4 @@
+{% from "_file_choices.html" import file_choice_selects with context %}
 {% for entry in pending %}
 {% set parsed = entry.parsed or {} %}
 <section class="pending" data-message-id="{{ entry.message_id }}">
@@ -20,6 +21,7 @@
     <button type="button" class="btn primary" data-action="create" data-message-id="{{ entry.message_id }}">Create project</button>
     <button type="button" class="btn" data-action="preview" data-message-id="{{ entry.message_id }}">Preview note</button>
   </div>
+  {{ file_choice_selects(file_groups, parsed.level) }}
   <div class="row">
     <select class="link-select" data-message-id="{{ entry.message_id }}" aria-label="Existing folder">
       <option value="">Link to existing folder...</option>

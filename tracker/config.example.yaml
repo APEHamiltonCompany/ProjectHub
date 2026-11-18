@@ -25,11 +25,20 @@ scan_project_folders: true
 # Classic Outlook (not "New Outlook") access, read-only.
 outlook_com:
   enabled: true
+  # mailbox = every mail folder incl. Sent Items (Junk, Deleted Items, Drafts, Outbox always skipped);
+  # folders = only the folders listed under folders.
+  scope: mailbox
+  # mailbox scope: folder names or paths to skip (and their subfolders), e.g. [Graymail, Inbox/IT Announcements].
+  skip_folders: []
   folders:
     - Inbox
   calendar: true
   # How many days of email/calendar history to read (--since N on the command line overrides it).
   days_back: 60
+  # Refreshes read only mail received since the last refresh (minus a day of overlap); earlier mail comes from
+  # output/outlook_cache.json. A full read happens when the last one is older than full_read_hours.
+  incremental: true
+  full_read_hours: 24
 me:
   # Your name exactly as it appears in PM kickoff schedules.
   name: ""
@@ -47,13 +56,37 @@ holidays:
   - 2027-07-05
   - 2027-09-06
 # true: new assignment emails create project folders automatically. false: they wait in the hub for "Create project".
+# Either way, an assignment email only counts as yours when me.name or me.email is on its To: line (CC doesn't count).
 auto_create_projects: false
+# Optional: your own email rules (setup.cmd -> Email rules). Without this, the triggers in rules.yaml apply.
+# email_rules:
+#   - {id: at_notification, label: A&T notification, stage: System Test, keywords: [A&T Notification]}
 # Days ahead that count as "due soon" in the tracker summary.
 due_soon_days: 3
 # Regex of extra PM schedule rows to track besides the ones assigned to you.
 pm_schedule_include: '(?i)test plan|parts for testing|prefab ?apps|apps|demo|fat|need-by|ship|close ?out'
-# Excel file copied into each new project folder as <date>_TimeEstimates.xlsx. Skipped if blank or missing.
+# Legacy: used only when project_files (below) is not set. Copied as "TimeEstimates <SO>.xlsx".
 time_estimate_template: ""
+
+# --- Template files copied into new project folders -------------------------------
+# Folder the project_files sources are relative to.
+templates_root: 'R:/APE_AE/TEMPLATES'
+# Files without a group are copied into every new project. For each group you pick one file
+# (or None if none_allowed) when creating the project in the hub; automatic creation adds a
+# task to pick it on the project page. The newest version of a source is used (lock files and
+# "(1)" copies are ignored); existing copies are never overwritten.
+# Name tokens: {ident} = SO, else QTE, else project #; {so}; {qte}; {project_no}; {customer}.
+project_files:
+  files:
+    - {id: time_estimate, label: TimeEstimates, source: 'Time Estimate/TimeEstimates*.xlsx', name: 'TimeEstimates {ident}'}
+    - {id: parts_request, label: Parts request, source: 'Parts Request/PartsRequestSO-*.xlsx', name: 'PartsRequest{ident}'}
+    - {id: test_matrix_l1, group: test_matrix, label: L1Carrier, source: 'Design Review Test Matrix/DesignReview_TestMatrix_L1Carrier*.pptx', name: 'DesignReview_TestMatrix_L1Carrier {ident}'}
+    - {id: test_matrix_l2l3, group: test_matrix, label: L2L3, source: 'Design Review Test Matrix/DesignReview_TestMatrix_L2L3*.pptx', name: 'DesignReview_TestMatrix_L2L3 {ident}'}
+    - {id: compliance, group: project_document, label: Compliance, source: 'Generic Test Checklists/APE Custom 020XXXX Compliance_V*.docx', name: 'APE Custom {project_no} Compliance_V1.0.0'}
+    - {id: apps_plan, group: project_document, label: Applications plan, source: 'Apps Plan/Applications Development Plan Template v*.docx', name: 'Applications Development Plan {ident}'}
+  groups:
+    test_matrix: {label: Test matrix, none_allowed: true}
+    project_document: {label: Project document, none_allowed: false}
 
 # --- Program output (created automatically; defaults are inside this repo) -----
 # snapshot_path: output/snapshot.json
@@ -80,6 +113,11 @@ install_dashboard_note: false
 # --- APE Project Tracking workbook (read-only) ---------------------------------
 ape_sheet:
   enabled: true
+  # SharePoint shortcut (.url file, or a folder holding "APE Project Tracking*.url"). When found, the sheet is
+  # opened read-only in a hidden Excel (your Office sign-in) and a copy saved in data/ape_tracker, at most every
+  # download_hours; "Sync to Project Tracker" on the Projects page always gets a fresh copy.
+  shortcut: "R:/APE_AE"
+  download_hours: 12
   # Fallback folder searched for the workbook (e.g. where you download it).
   path: ""
   pattern: "APE Project Tracking*.xlsx"
@@ -96,7 +134,7 @@ ape_sheet:
 tools:
   # WireDiagramBuilder.exe, launched from wiring-diagram tasks.
   wire_diagram_builder: ""
-# Files copied into a project folder from the hub. {ident} = SO/QTE, {project_folder} = the project folder.
+# Files copied from a task button ('template:<name>' launches; 'file:<id>' uses project_files above). {ident} = SO/QTE, {project_folder} = the project folder.
 file_templates:
   parts_request:
     source: 'R:\APE_AE\TEMPLATES\Parts Request\PartsRequestSO-XXXXXXX.xlsx'

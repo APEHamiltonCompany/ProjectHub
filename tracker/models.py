@@ -51,6 +51,10 @@ class Project:
     qte: list[str] = field(default_factory=list)
     level: str = ""
     stage: str = "Unknown"
+    stage_manual: str = ""
+    stage_manual_source: str = ""
+    id_prefix: str = ""
+    so_dismissed: list[str] = field(default_factory=list)
     assigned: str = ""
     tasks: list[Task] = field(default_factory=list)
     triggers: dict[str, date] = field(default_factory=dict)

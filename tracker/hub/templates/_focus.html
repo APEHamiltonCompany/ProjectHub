@@ -50,7 +50,7 @@
       <ul class="mini-projects">
         {% for card in project_cards %}
         <li>
-          <a href="{{ url_for('project_page', key=card.key) }}"><span class="dot dot-{{ 'bad' if card.overdue else 'warn' if card.due_soon else 'good' }}"></span><span class="side-name">{{ card.name }}</span></a>
+          <a href="{{ url_for('project_page', key=card.key) }}"><span class="dot dot-{{ 'bad' if card.overdue else 'warn' if card.due_soon else 'good' }}"></span><span class="side-text"><span class="side-name">{{ card.customer or card.ident }}</span>{% if card.customer %}<span class="side-ident">{{ card.ident }}</span>{% endif %}</span></a>
           {{ macros.ship_badge(card.ship_days) }}
         </li>
         {% endfor %}

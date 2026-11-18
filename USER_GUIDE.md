@@ -19,7 +19,7 @@ What it does:
 1. **Python**: finds Python 3.10 or newer (`py -3.12`, then `py -3`, then `python`). If none is found it offers to install Python 3.12 with winget, or points you at the python.org download page.
 2. **Virtual environment**: creates `.venv` in the ProjectHub folder and installs `requirements.txt` into it.
 3. **Outlook**: checks that classic Outlook is registered and warns if it isn't.
-4. **Configuration**: opens the setup window (`tracker\setup_gui.py`). It asks for your name, work email, initials, project folder root and folder layout (see 1.6a), My Tasks file, time estimate template, WireDiagramBuilder path, email sources and APE sheet location, with Browse buttons, plus optional advanced settings (holidays, hub port, refresh interval and more). It checks the paths before writing `tracker\config.yaml`. **Save and test run** runs a tracker dry run in the window. Close the window to continue setup. For text prompts instead, run `setup.cmd -Console`.
+4. **Configuration**: opens the setup window (`tracker\setup_gui.py`). It asks for your name, work email, initials, project folder root and folder layout (see 1.6a), My Tasks file, time estimate template, WireDiagramBuilder path, email sources (including **Outlook search**: Whole mailbox or Specific folders, and **Skip folders**), **Email rules** and APE sheet location, with Browse buttons, plus optional advanced settings (holidays, hub port, refresh interval and more). It checks the paths before writing `tracker\config.yaml`. **Save and test run** runs a tracker dry run in the window. Close the window to continue setup. For text prompts instead, run `setup.cmd -Console`.
 5. **Background services**: optionally registers the **ProjectHub** logon task and the **ProjectTracker** 06:30 weekday task, starts the hub and waits up to 60 seconds for it to answer.
 6. **Desktop shortcut**: creates `Project Hub.url` on your desktop.
 7. **Chrome extension**: optionally opens the `chrome_extension` folder, copies its path to the clipboard and opens `chrome://extensions`.
@@ -28,7 +28,7 @@ Rerun `setup.cmd` to change an answer: the setup window opens with your current 
 
 ### 1.2 Prerequisites
 1. **Python 3.10 or newer** (3.12 recommended). `setup.cmd` installs it if you agree.
-2. **Classic Outlook** (OUTLOOK.EXE), not "New Outlook". The tracker reads the Inbox and Calendar through classic Outlook. Keep it signed in. If it's closed when the tracker runs, the tracker tries to start it in the background.
+2. **Classic Outlook** (OUTLOOK.EXE), not "New Outlook". The tracker reads your whole mailbox (every mail folder except Deleted Items, Junk, Drafts, Outbox and the sync/conflict folders) and the Calendar through classic Outlook. Keep it signed in. If it's closed when the tracker runs, the tracker tries to start it in the background.
 3. **Google Chrome**, for the tab-group extension (optional).
 4. The project folder root (the "vault"), for example
    `%OneDrive%\Desktop\Projects\Project Specific Documents`. With `project_folder_layout: customer/so` (the default) projects live in `<vault>\<Customer>\SO-######`. See 1.6a.
@@ -48,9 +48,13 @@ Then check `tracker\config.yaml`:
 - `vault`: the project folder root above.
 - `me.name`: your name as it appears in PM schedules. Rows assigned to you in a kickoff schedule are always tracked.
 - `holidays`: company holidays. Deadlines are counted in business days and skip these dates.
-- `time_estimate_template`: path to `TimeEstimates.xlsx`.
+- `templates_root`: the template folder (`R:/APE_AE/TEMPLATES`); `project_files` lists what is copied into new projects.
+- `time_estimate_template`: legacy, used only without `project_files`.
 - `project_folder_layout`: `customer/so` (default) or `flat`; see 1.6a.
 - `auto_create_projects: false`: new assignments wait in the hub for you to click **Create project**.
+- `outlook_com.scope`: `mailbox` (default, every mail folder) or `folders` (only `outlook_com.folders`). `outlook_com.skip_folders` lists folders to leave out, by name (`Graymail`) or path (`Inbox/IT Announcements`); subfolders are skipped too. Email details are cached in `output\outlook_cache.json`, so the first run after setup takes a couple of minutes and later runs take seconds. With `outlook_com.incremental: true` (default) each refresh reads only email received since the last refresh (with a one-day overlap) and keeps the rest from the cache; a full read happens every `outlook_com.full_read_hours` (24) hours, or whenever you change the scope or folders.
+- `ape_sheet.shortcut`: the folder holding the `APE Project Tracking*.url` shortcut (`R:/APE_AE`), or the `.url` file itself. The whole team can use the same shortcut. `ape_sheet.download_hours` (12): how old the downloaded copy can get before the hub downloads a new one. See 2.10.
+- `email_rules`: the email rules from the setup window (see 2.6). Leave it out to use the defaults in `tracker\rules.yaml`.
 - `hub.port` (8765), `hub.refresh_minutes` (15), `hub.toast` (true = Windows notification for new assignments).
 - `tools.wire_diagram_builder`: path to `WireDiagramBuilder.exe`. The launch shortcuts in `tracker\rules.yaml` refer to it as `tool:wire_diagram_builder`; leave it empty to hide those buttons.
 
@@ -118,7 +122,7 @@ Go to `http://localhost:8765`. The left sidebar has the navigation, a list of yo
 
 ### 2.1a Choose a layout
 Pick one in the sidebar. The hub remembers your choice; you can also add `?layout=board`, `?layout=timeline` or `?layout=focus` to the address.
-- **Board**: a JIRA-style board with one column per project stage (Pre-Kickoff, Design, Design Review, Apps Plan, Fabrication/Test, System Test, Closeout, Completion). Each project is a card showing:
+- **Board**: a JIRA-style board with one column per project stage (Pre-Kickoff, Pre-Fabrication, Fabrication, System Test, Closeout, Completion; see 2.6 for which email moves a project where). Each project is a card showing:
   - the customer, SO/QTE and level;
   - a ship-date countdown and a progress bar;
   - overdue and due-soon counts;
@@ -126,6 +130,8 @@ Pick one in the sidebar. The hub remembers your choice; you can also add `?layou
   - the team;
   - **Open as tab group**, and an expand button that lists the project's open tasks.
   
+  The **Completion** column is collapsed: it shows only how many projects are complete and a link to **Projects** filtered to Completion (`/projects?stage=Completion`). Completed projects are also left out of the timeline, the task lists, the KPI tiles and the sidebar project list; they stay on the Projects page.
+
   The timeline and the task table sit below the board. On the board, **Fit columns** (top bar) squeezes every column to the window width instead of scrolling sideways; empty stages get narrower columns. The board uses the full window width, and a lower **Zoom** shows more columns at once. With **Fit columns** on, task titles are clamped to two lines - hover a title to read it in full. In dark mode the cards are a lighter grey than the page background.
 - **Timeline**: closest to the old dashboard. KPI tiles, a large Gantt chart, the full task table and a project summary table.
 - **Focus**: an agenda of what to do next. Open tasks are grouped into Overdue / Today / This week / Next week / Later / No date. Each task has a quick "Set date" control. A compact six-week timeline and the project list sit on the right.
@@ -194,18 +200,21 @@ Every personal task (a line in `My Tasks.md` with an `m-` id) has its own page. 
 - **Shortcut** stores a launch target in the note's frontmatter. Once set, a ▶ button appears on the task page and next to the task in the My tasks column.
 
 ### 2.2 When a new project is assigned
+Only assignment emails with you on the **To:** line count. If you are only on CC (as the managers are on every assignment), no project or pending assignment is made. Being on both To and CC is fine.
+
 1. A Windows notification appears ("New project assignment: ...") and a banner shows at the top of the dashboard.
 2. Check the details: customer, SO/QTE, project number, level, team, SharePoint link.
 3. Optional: click **Preview note** to see the note that will be created.
 4. Choose one:
-   - **Create project**: edit the folder name if you like, then click. The hub creates the folder in the vault and a note pre-filled with the frontmatter, team, links, the AE Order Review Checklist from the email and the full workflow checklist. It also copies `TimeEstimates.xlsx` in as `<DDMONYYYY>_TimeEstimates.xlsx`.
+   - **Create project**: edit the folder name if you like, then click. The hub creates the folder in the vault and a note pre-filled with the frontmatter, team, links, the AE Order Review Checklist from the email and the full workflow checklist. It also copies the template files (see **Project files** in 2.3): first pick a **Test matrix** (L1Carrier, L2L3, or None for repeat parts) and a **Project document** (Compliance or Applications plan) in the dropdowns under the folder name. If a template or a needed number is missing, the project is still created and the toast lists what was not copied. Projects created automatically by the tracker run (`auto_create_projects`) get only the always-copied files plus a task to choose the rest on the project page.
    - **Link to existing folder**: if you already made the folder, pick it. Empty fields in its note are filled in; nothing you wrote is changed.
    - **Dismiss**: not your project, or ignore it. It won't come back.
 5. Due dates for the first steps appear after the automatic refresh that follows. Those steps are: review CPR/SO, ACE questions, and the time estimate (2 business days after assignment).
 
 ### 2.3 Work on a project (project page)
 Click a project name, or go to `http://localhost:8765/p/<project number>` (for example `/p/0200000`). The page has:
-- **Header**: customer, SO/QTE, level, stage, ship date with days left, design need-by date, team.
+- **Header**: customer, SO/QTE, level, stage, ship date with days left, design need-by date, team. **Stage** is a dropdown: pick a stage to set it by hand (shown as "set by hand"; stored as `stage_manual:` in the note frontmatter). A stage set by hand always wins over emails. Choose **Follow emails** to go back to the stage the emails give.
+- **SO numbers** (header): when a quote becomes an order, type the SO number(s) and click **Add SO**. The QTE stays on the project, so old emails still match. With **rename folder** ticked (default) the folder becomes `SO-285770 (QTE-054686)`; untick it to keep the name. Task ticks, notes, due-date changes and your links carry over. If an email subject names the project's QTE and a new SO, the header shows **Add SO-…** (one click) or **Dismiss** (never suggest that SO again).
 - **Links**: SharePoint, CPR, RMT and other links found in the project's emails. Use **Add link** for your own (for example the pptx), and remove links you don't need.
 - **Open as tab group** (with the extension): creates a Chrome tab group named after the project, holding this page and every link. If the group already exists, it focuses that group instead.
 - **Open folder** opens the project folder in Explorer. **Open note in editor** opens the `.md` file in your default editor.
@@ -221,7 +230,17 @@ Click a project name, or go to `http://localhost:8765/p/<project number>` (for e
       folders: ['{project_folder}']
       fill: {}
   ```
-  `source` is the template to copy. `name` is the new filename and takes `{ident}` (first SO, else first QTE, else the project number), `{so}`, `{qte}`, `{project_no}`, `{customer}` and `{date}`; if a token has no value the copy stops with "this project has no ...". `folders` lists where the copy goes: `{project_folder}` is the project folder, any other entry is an absolute path that must already exist. `fill` is reserved for later. `tracker/rules.yaml` uses it on Parts Required for Testing as `launch: 'template:parts_request'`; override it for one project by typing `template:<name>` in **⋯ adjust** → **Shortcut**.
+  `source` is the template to copy. `name` is the new filename and takes `{ident}` (first SO, else first QTE, else the project number), `{so}`, `{qte}`, `{project_no}`, `{customer}` and `{date}`; if a token has no value the copy stops with "this project has no ...". `folders` lists where the copy goes: `{project_folder}` is the project folder, any other entry is an absolute path that must already exist. `fill` is reserved for later. `file:<name>` falls back to `template:<name>` when `<name>` is not in `project_files`. Override it for one project by typing `template:<name>` in **⋯ adjust** → **Shortcut**.
+- **Project files**: the template files for this project, copied from `templates_root` (`R:/APE_AE/TEMPLATES`):
+  | File | Copy name |
+  |---|---|
+  | TimeEstimates (always) | `TimeEstimates SO-297037.xlsx` |
+  | Parts request (always) | `PartsRequestSO-297037.xlsx` |
+  | Test matrix: L1Carrier / L2L3 / None | `DesignReview_TestMatrix_L2L3 SO-297037.pptx` |
+  | Project document: Compliance | `APE Custom 0201234 Compliance_V1.0.0.docx` (project number only) |
+  | Project document: Applications plan | `Applications Development Plan SO-297037.docx` |
+
+  The SO is used, else the QTE, else the project number. The newest template version is copied (Office `~$` lock files and `(1)` copies are ignored). **Open** opens the copy; **Create** copies it first. Change a test matrix / project document choice with its dropdown; the choice is stored in the note frontmatter as `test_matrix:` and `project_document:`. Existing files are never overwritten. Task buttons use the same files: `launch: 'file:<id>'` in `tracker/rules.yaml` (Time estimate → TimeEstimates; Test matrix and Design review → test matrix; ADP start, Kickoff, Apps Plan and Closeout ADP → project document; Parts for testing → parts request). The list of files is `project_files` in `tracker/config.yaml`; see `tracker/config.example.yaml`. Without `project_files`, the legacy `time_estimate_template` is copied as `TimeEstimates <SO>.xlsx`.
 - **Note > Rendered**: the whole note with real checkboxes. Tick a box to mark it done; click **N/A** to mark it not needed. Each change is saved to the `.md` file immediately.
 - **Note > Edit text**: the text editor on the left and a live preview on the right. The preview's checkboxes are clickable too. Nothing is written until you click **Save**, and an "Unsaved changes" flag shows until you do. If the file changed somewhere else since you opened it (for example in OneDrive or Notepad), the hub warns you instead of overwriting. You can then reload, or overwrite on purpose.
 - **Note > Live edit**: edit the formatted note directly, like Obsidian's live preview. Every line is shown formatted; click a line to see and edit its markdown in place. **Enter** starts a new line (lists and checkboxes continue automatically; press Enter on an empty item to end the list), **Backspace** at the start of a line joins it to the line above, **Tab**/**Shift+Tab** indents, the arrow keys move between lines and **Esc** stops editing. Checkboxes and links work without entering edit mode. It shares the same **Save** button, unsaved flag and conflict warning as Edit text, and the two tabs stay in sync. Open it directly with `?tab=live` on the project URL.
@@ -258,21 +277,27 @@ On the project page, each open step has a date box and a note box:
 
 ### 2.6 Triage unclassified emails
 The **Unclassified emails** section lists emails that mention a project but don't match a workflow trigger. Example: "Acme QTE-123456 Review".
-- Click **Kickoff**, **Design review**, **Internal DR**, **WO firm** or **Closeout** to treat the email as that event. Its date then starts the matching deadlines.
+- Click one of the email rule buttons (**Kickoff**, **Internal design review**, **Design review**, **Work order firm**, **A&T notification**, **Closeout**) to treat the email as that event. Its date then starts the matching deadlines.
 - Click **Ignore** to hide it.
 - Click a subject to open the email in Outlook (or the `.eml` file). Nothing about the email is changed: it is not marked read, moved or saved.
 - The hub refreshes automatically after you choose.
 
-What each event starts, in business days:
+Which stage each email moves the project to, and what it starts, in business days:
 
-| Email/event | Steps due |
-|---|---|
-| Assignment | Review CPR/SO, ACE questions, time estimate + RMT: +2 |
-| Kickoff | Wiring diagram: +1 |
-| Internal design review | Test matrix: +1 |
-| Design review | Finish Apps Plan: +5 |
-| Work order firm | Parts required for testing: +5 |
-| Closeout email | Closeout documents / reply: +5 |
+| Email (subject contains) | Stage | Steps due |
+|---|---|---|
+| Project Assignment (you on To:) | Pre-Kickoff | Review CPR/SO, ACE questions, time estimate + RMT: +2 |
+| Kickoff | Pre-Fabrication | Wiring diagram: +1 |
+| Internal design review, Internal review | Pre-Fabrication | Test matrix: +1 |
+| Design review | Pre-Fabrication | Finish Apps Plan: +5 |
+| WO firm / Work order firm | Fabrication | Parts required for testing: +5 |
+| A&T Notification | System Test | - |
+| Closeout / Close out | Closeout | Closeout documents / reply: +5 |
+| (none) | Completion | Set by hand or by **Sync to Project Tracker** (2.10a) |
+
+Matching ignores case and spacing. Replies, forwards and automatic replies don't move a project. When a subject matches several rules (for example "INTERNAL REVIEW APE WO FIRM"), the later stage wins. Fabrication has no checklist; it only shows where the project is.
+
+Change the keywords or stage of each rule in `setup.cmd` → **4. Email rules** (comma-separated keywords). They are saved as `email_rules` in `tracker\config.yaml`, separately for each user; unchanged rules are not saved, so the defaults in `tracker\rules.yaml` apply.
 
 Kickoff emails that include a PM schedule table also add a **PM schedule** section. It lists rows assigned to you plus key milestones: test plan, parts for testing, PreFabApps, need-by, ship, closeout.
 
@@ -285,10 +310,12 @@ Open **Settings** in the sidebar, or `http://localhost:8765/settings`. Everythin
 - **Due-soon window** in days: how far ahead counts as "due soon".
 - **Project notes folder**: the `.md` vault. It must already exist. Changing it triggers a refresh so the project list is rebuilt.
 - **Personal tasks file**: the `.md` file that holds non-project tasks.
-- **TimeEstimates template**: the `.xlsx` copied into a new project folder.
+- **TimeEstimates template**: legacy; only used when `tracker/config.yaml` has no `project_files`. The template folder (`templates_root`) is set in `setup.cmd` or `config.yaml`.
 
 ### 2.8 Projects page (archive, delete, restore)
 Open **Projects** in the sidebar, or `http://localhost:8765/projects`. It lists every project the hub has indexed, with its customer, SO/QTE, stage, open task count, last email date and folder path.
+- **Set stage**: tick projects (or the header box to tick all shown), filter by stage with the stage filter, pick a stage and click **Set stage**. This sets the stage by hand for all of them (marked "(manual)"), the same as the project page dropdown. Pick **Follow emails** to clear it. Projects with no emails in the history window show as **Unknown** until you set them, or until **Sync to Project Tracker** sets them (2.10a).
+- Every project folder gets a note: the tracker run creates a minimal one (stage Unknown, no workflow tasks) for any folder without a `.md` file, and the hub creates one when you set a stage or add a task. Existing notes are never overwritten.
 - **Create project manually** (top of the page) makes a project without waiting for an email. Fill in Customer (required), SO numbers, QTE numbers, Project # (7 digits, optional), Description, Level and Folder name; separate several SO or QTE numbers with commas or spaces. Leave Folder name blank and the hub names the folder from the customer and the first SO (or QTE, or the project number): `Customer/SO-######` in the `customer/so` layout, `Customer SO-###### <project #>` in the `flat` layout. You can type either form. It creates the folder, the note and the time-estimate sheet from the template, then opens the project page. Add links (SharePoint, email, etc.) on the project page afterwards.
 - **Open folder** opens the project folder in Explorer.
 - **Archive** moves the folder into `_Archive` inside the vault, keeping the customer level (`_Archive\<Customer>\SO-######`); an emptied customer folder is removed. Archived projects drop out of the board, the timeline and the project list. The **Archived** section lists them with **Restore** (moves the folder back) and **Open folder**.
@@ -314,15 +341,35 @@ What you see:
 - A ship date taken from the sheet when no email supplied one. The project page marks it "(from sheet)".
 - A line at the top of the Dashboard with the sheet's file date, which copy it read (OneDrive-synced or Downloads) and an **Open sheet** link to the SharePoint copy.
 
-Safety: the tracker copies the workbook into `data\ape_tracker` and reads only that copy. The original is never opened for writing, never opened in Excel and never saved. Only the Active Projects, New Projects and Dropdowns tabs are read; the $ amount columns are ignored.
+Safety: the tracker reads only a copy of the workbook in `data\ape_tracker`. The original is never written to or saved. Only the Active Projects, New Projects, Completed FY… and Dropdowns tabs are read; the $ amount columns are ignored. Rows marked On-Going (a different type of project) are ignored, and FROM TRACKER SHEET entries are offered only for rows assigned in the last 45 days that are not on a Completed tab.
 
-Keeping it fresh automatically:
-1. In SharePoint open **General › Tracking Documents** and click **Sync** (or **Add shortcut to My files** on the folder). "Add shortcut to My files" on the single file only makes a `.url` web link, which is not the workbook.
-2. Delete any old `APE Project Tracking*.url` shortcuts from your OneDrive folder.
-3. The hub finds `Tracking Documents\APE Project Tracking.xlsx` under your OneDrive sync folders by itself, so no path is needed in Settings.
-4. Don't open and save the synced copy in desktop Excel; let OneDrive keep it as the server copy.
+Where the copy comes from (first match wins):
+1. **SharePoint shortcut** (recommended, works for the whole team): set `ape_sheet.shortcut` to `R:/APE_AE`, the folder holding the `APE Project Tracking.xlsx.url` shortcut. The hub opens that link in a hidden, read-only Excel session using your Office sign-in and saves a copy as `data\ape_tracker\APE_Tracking_<date>.xlsx`. This takes about a minute. The copy is reused until it is `ape_sheet.download_hours` (12) hours old; **Sync to Project Tracker** always downloads a fresh one. If a download fails, the last copy is used and the Dashboard line says so.
+2. A OneDrive-synced `Tracking Documents\APE Project Tracking.xlsx` (when `ape_sheet.auto_find` is on), or the file in `ape_sheet.path`.
+3. The newest `APE Project Tracking*.xlsx` in your Downloads folder (File > Download a copy).
 
-Until the folder is synced, the hub uses the newest `APE Project Tracking*.xlsx` in your Downloads folder (File > Download a copy). After 48 hours without a fresh download the Dashboard line turns amber and says the downloaded copy is old.
+After 48 hours without a fresh copy the Dashboard line turns amber and says the copy is old.
+
+### 2.10a Sync to Project Tracker
+The tracker sheet is the team's record of where every SO stands, so you can set the hub's stages from it instead of from emails. On **Projects**, click **Sync to Project Tracker**. The hub downloads a fresh copy of the sheet (about a minute) and shows a preview: each project with its current stage, the proposed stage and the reason. Nothing changes until you tick the rows you want and click **Apply**.
+
+How the sheet's SO Status maps to a stage:
+
+| SO Status | Stage |
+|---|---|
+| 01 | Pre-Kickoff |
+| 02 – 05 | Pre-Fabrication |
+| 06 – 11 | Fabrication |
+| 12 | System Test |
+| 13, on a Completed FY… tab, or no longer on Active Projects | Completion |
+| HOLD | no change (stays in its last stage) |
+| On-Going | ignored |
+
+- **Several SOs in one folder**: the project goes to Completion only when every SO is complete or off the sheet. Otherwise it takes the stage of the least advanced active SO.
+- **Shown unticked** (review before applying): projects with recent activity (assigned or emailed in the last 30 days) that the sheet doesn't show as done, projects whose stage you set by hand, and proposals that move a project to an earlier stage than its emails show.
+- Quote-only folders (QTE numbers, no SO) are skipped unless the sheet lists them.
+- **SO numbers for QTE projects**: the preview also lists SOs for QTE folders. Ticked when the sheet's QTE row and SO row share a Project ID (PRJ-…); unticked when only the 7-digit project number links them, when the project already has an SO, or when that SO already has its own folder (merge those by hand). **also rename folders** (on by default) renames to `SO-… (QTE-…)`.
+- Applied stages are pinned like a manual stage and labelled with the source "tracker sheet". A later sync may change them again; stages you set by hand are never ticked by default. Pick **Follow emails** on the project page to go back to email-driven stages.
 
 ### 2.11 Timesheet
 Open **Timesheet** in the sidebar, or `http://localhost:8765/timesheet`. It shows one row per project for a week (Monday to Sunday by default) with **Prev**, **This week**, **Next** and a start/end date form for any other range up to 31 days.
@@ -359,7 +406,7 @@ Ticks made outside the hub (typed directly in the `.md`) show up in the note but
 
 ## Part 4: Customising
 
-- **Workflow steps and offsets**: `tracker\rules.yaml`. `triggers` holds the subject patterns for each email type. `workflow` holds each step, its stage and its offset in business days from a trigger. After editing, run `.venv\Scripts\python -m tracker.tracker --dry-run` to check.
+- **Workflow steps and offsets**: `tracker\rules.yaml`. `buckets` lists the board stages in order; `triggers` holds the keywords (or `subject_regex`) and stage for each email type, overridden by `email_rules` from the setup window. `workflow` holds each step, its stage and its offset in business days from a trigger. After editing, run `.venv\Scripts\python -m tracker.tracker --dry-run` to check.
 - **Note template**: `templates\Project Template.md`, used when **Create project** makes a new note.
 - **PM schedule rows to keep**: `pm_schedule_include` in `tracker\config.yaml`, a regular expression on the row name.
 - **How far back emails are read**: `outlook_com.days_back` in `config.yaml`, or `--since N` on the command line.
@@ -375,7 +422,8 @@ Ticks made outside the hub (typed directly in the `.md`) show up in the note but
 | No new emails appear | Classic Outlook must be installed and signed in; "New Outlook" can't be read. See `output\hub_last_run.log` and `output\last_run.log`. |
 | Refresh seems stuck | Outlook may be showing a dialog. Bring it to the front. The tracker gives up after 10 minutes. |
 | A project isn't picked up | The folder must be a direct child of the vault and its name or note must contain the SO-/QTE- number or the 7-digit project number. `General` and folders starting with `.` are skipped. |
-| An email went to the wrong step | Use the triage buttons, or set `email_overrides` in `tracker\state.json`. |
+| An email went to the wrong step | Use the triage buttons, or set `email_overrides` in `tracker\state.json`. To pin the project's stage, use the Stage dropdown. |
+| A new assignment didn't create a project | You must be on the To: line (CC only is ignored). `me.name` or `me.email` in `config.yaml` must match how Outlook shows you. |
 | A note didn't update | Very long paths are handled automatically. Check that the file isn't open with unsaved changes elsewhere, and look in `output\last_run.log`. |
 | "Open as tab group" does nothing | The extension isn't loaded (see 1.7), or it was reloaded; click **Reload** on **Project Hub Tab Groups** in `chrome://extensions`, then refresh the hub page. The button always ends with a toast saying why it failed. |
 | A recurring task didn't add the next copy | The task must have a `🔁` rule and be ticked `[x]` or `[-]`. If an open copy with the same title, rule and due date already exists, no second copy is added. |

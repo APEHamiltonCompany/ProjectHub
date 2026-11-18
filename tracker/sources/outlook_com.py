@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Iterable, Optional
 
 from ..models import Email
 
@@ -11,6 +11,11 @@ FOLDER_INBOX = 6
 FOLDER_SENT = 5
 FOLDER_CALENDAR = 9
 DEFAULT_FOLDERS = {"inbox": FOLDER_INBOX, "sent items": FOLDER_SENT, "sent": FOLDER_SENT}
+# Deleted Items, Outbox, Drafts, Conflicts, Sync Issues, Local/Server Failures, Junk Email.
+SKIPPED_DEFAULT_FOLDERS = (3, 4, 16, 19, 20, 21, 22, 23)
+MAIL_FOLDER_TYPE = 0
+SCOPE_MAILBOX = "mailbox"
+SCOPE_FOLDERS = "folders"
 PR_INTERNET_MESSAGE_ID = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
 PR_SMTP_ADDRESS = "http://schemas.microsoft.com/mapi/proptag/0x39FE001F"
 
@@ -130,6 +135,74 @@ def _mail(item, folder_name: str, sender_smtp: Optional[str] = None) -> Optional
     )
 
 
+def scope(settings: dict) -> str:
+    value = str(settings.get("scope") or SCOPE_MAILBOX).strip().lower()
+    return value if value in (SCOPE_MAILBOX, SCOPE_FOLDERS) else SCOPE_MAILBOX
+
+
+def _entry_id(folder) -> str:
+    try:
+        return str(folder.EntryID)
+    except Exception:
+        return ""
+
+
+def _skipped(path: str, name: str, skip: list[str]) -> bool:
+    path = path.lower()
+    name = name.lower()
+    for item in skip:
+        item = item.replace("\\", "/").strip("/").lower()
+        if item and (item == name or item == path or path.endswith("/" + item) or path.startswith(item + "/")):
+            return True
+    return False
+
+
+def mailbox_folders(namespace, skip: Iterable[str] = ()) -> list[tuple[str, object, bool]]:
+    """(path, folder, is_sent) for every mail folder in the default mailbox, minus junk/deleted/drafts/outbox
+    and anything named in skip (a folder name like "Graymail" or a path like "Inbox/IT Announcements";
+    skipping a folder skips its subfolders)."""
+    inbox = namespace.GetDefaultFolder(FOLDER_INBOX)
+    root = inbox.Parent
+    excluded = set()
+    for kind in SKIPPED_DEFAULT_FOLDERS:
+        try:
+            excluded.add(_entry_id(namespace.GetDefaultFolder(kind)))
+        except Exception:
+            continue
+    excluded.discard("")
+    try:
+        sent_id = _entry_id(namespace.GetDefaultFolder(FOLDER_SENT))
+    except Exception:
+        sent_id = ""
+    skip = [str(item) for item in skip or [] if str(item).strip()]
+    found: list[tuple[str, object, bool]] = []
+
+    def walk(folder, path: str) -> None:
+        try:
+            children = list(folder.Folders)
+        except Exception:
+            return
+        for child in children:
+            try:
+                name = str(child.Name)
+            except Exception:
+                continue
+            child_path = (path + "/" + name) if path else name
+            if _entry_id(child) in excluded or _skipped(child_path, name, skip):
+                continue
+            try:
+                is_mail = child.DefaultItemType == MAIL_FOLDER_TYPE
+            except Exception:
+                is_mail = False
+            if not is_mail:
+                continue
+            found.append((child_path, child, bool(sent_id) and _entry_id(child) == sent_id))
+            walk(child, child_path)
+
+    walk(root, "")
+    return found
+
+
 def collect(config: dict, since_days: Optional[int] = None) -> list[Email]:
     settings = config.get("outlook_com") or {}
     if not settings.get("enabled"):
@@ -139,22 +212,190 @@ def collect(config: dict, since_days: Optional[int] = None) -> list[Email]:
     namespace = _namespace()
     me = _me(namespace)
     emails: list[Email] = []
-    for folder_name in settings.get("folders") or []:
-        folder = _folder(namespace, folder_name)
-        if folder is None:
-            print("outlook: folder not found: %s" % folder_name)
-            continue
-        sent = folder_name.strip().lower().startswith("sent")
-        field = "[SentOn]" if sent else "[ReceivedTime]"
-        items = folder.Items.Restrict("%s >= '%s'" % (field, _restrict_date(cutoff)))
-        for item in items:
-            try:
-                parsed = _mail(item, folder_name, sender_smtp=me if sent else None)
-            except Exception:
+    if scope(settings) == SCOPE_MAILBOX:
+        targets = mailbox_folders(namespace, settings.get("skip_folders") or [])
+    else:
+        targets = []
+        for folder_name in settings.get("folders") or []:
+            folder = _folder(namespace, folder_name)
+            if folder is None:
+                print("outlook: folder not found: %s" % folder_name)
                 continue
-            if parsed is not None:
-                emails.append(parsed)
+            targets.append((folder_name, folder, folder_name.strip().lower().startswith("sent")))
+    cache_path = _cache_path(config)
+    cached = _load_cache(cache_path)
+    meta = _load_meta(cache_path)
+    started = datetime.now()
+    scope_key = _scope_key(settings, days)
+    since = incremental_since(meta, scope_key, started, settings)
+    seen: dict[str, dict] = {}
+    if since is not None:
+        print("outlook: reading mail since %s (incremental)" % since.strftime("%Y-%m-%d %H:%M"))
+        cutoff_aware = cutoff.astimezone()
+        for entry_id, row in cached.items():
+            try:
+                when = datetime.fromisoformat(row["date"])
+            except (KeyError, ValueError):
+                continue
+            if (when if when.tzinfo else when.astimezone()) >= cutoff_aware:
+                seen[entry_id] = row
+    read_from = since or cutoff
+    for folder_name, folder, sent in targets:
+        field = "[SentOn]" if sent else "[ReceivedTime]"
+        restriction = "%s >= '%s'" % (field, _restrict_date(read_from))
+        try:
+            entry_ids = _table_entry_ids(folder, restriction)
+        except Exception:
+            entry_ids = None
+        if entry_ids is None:
+            items = folder.Items.Restrict(restriction)
+            for item in items:
+                try:
+                    parsed = _mail(item, folder_name, sender_smtp=me if sent else None)
+                except Exception:
+                    continue
+                if parsed is not None:
+                    emails.append(parsed)
+            continue
+        for entry_id in entry_ids:
+            row = cached.get(entry_id)
+            if row is None:
+                try:
+                    parsed = _mail(namespace.GetItemFromID(entry_id), folder_name, sender_smtp=me if sent else None)
+                except Exception:
+                    continue
+                if parsed is None:
+                    continue
+                row = _email_to_row(parsed)
+            row["folder"] = folder_name
+            seen[entry_id] = row
+    emails.extend(_row_to_email(row, row.get("folder") or "") for row in seen.values())
+    if seen or since is None:
+        new_meta = {
+            "scope": scope_key,
+            "last_read": started.isoformat(timespec="seconds"),
+            "last_full": meta.get("last_full", "") if since is not None else started.isoformat(timespec="seconds"),
+        }
+        _save_cache(cache_path, seen, new_meta)
     return emails
+
+
+INCREMENTAL_OVERLAP = timedelta(days=1)
+
+
+def _scope_key(settings: dict, days: int) -> str:
+    return "|".join(
+        [
+            scope(settings),
+            ",".join(sorted(str(item).lower() for item in settings.get("folders") or [])),
+            ",".join(sorted(str(item).lower() for item in settings.get("skip_folders") or [])),
+            str(days),
+        ]
+    )
+
+
+def incremental_since(meta: dict, scope_key: str, now: datetime, settings: dict) -> Optional[datetime]:
+    """Start of an incremental read (last read minus a day of overlap), or None for a full read: first run,
+    changed folders/days, incremental: false, or the last full read is older than full_read_hours (default 24)."""
+    if settings.get("incremental", True) is False or meta.get("scope") != scope_key:
+        return None
+    try:
+        last_read = datetime.fromisoformat(str(meta.get("last_read") or ""))
+        last_full = datetime.fromisoformat(str(meta.get("last_full") or ""))
+    except ValueError:
+        return None
+    try:
+        full_hours = float(settings.get("full_read_hours") or 24)
+    except (TypeError, ValueError):
+        full_hours = 24.0
+    if now - last_full > timedelta(hours=full_hours) or last_read > now:
+        return None
+    return last_read - INCREMENTAL_OVERLAP
+
+
+CACHE_BODY_LIMIT = 60000
+
+
+def _cache_path(config: dict):
+    from pathlib import Path
+
+    explicit = (config.get("outlook_com") or {}).get("cache_path")
+    if explicit:
+        return Path(explicit)
+    base = config.get("snapshot_path")
+    folder = Path(base).parent if base else Path(__file__).resolve().parents[2] / "output"
+    return folder / "outlook_cache.json"
+
+
+def _read_cache_file(path) -> dict:
+    import json
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) and data.get("version") == 1 else {}
+
+
+def _load_cache(path) -> dict:
+    items = _read_cache_file(path).get("items")
+    return items if isinstance(items, dict) else {}
+
+
+def _load_meta(path) -> dict:
+    meta = _read_cache_file(path).get("meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _save_cache(path, items: dict, meta: dict | None = None) -> None:
+    import json
+    import os
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"version": 1, "meta": meta or {}, "items": items}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print("outlook: cache not saved (%s)" % exc)
+
+
+def _email_to_row(email: Email) -> dict:
+    return {
+        "message_id": email.message_id,
+        "subject": email.subject,
+        "sender": email.sender,
+        "to": email.to,
+        "cc": email.cc,
+        "date": email.date.isoformat(),
+        "body_text": email.body_text[:CACHE_BODY_LIMIT],
+        "entry_id": email.entry_id,
+    }
+
+
+def _row_to_email(row: dict, folder_name: str) -> Email:
+    return Email(
+        message_id=row["message_id"],
+        subject=row["subject"],
+        sender=row["sender"],
+        to=row["to"],
+        cc=row["cc"],
+        date=datetime.fromisoformat(row["date"]),
+        body_text=row["body_text"],
+        source_path="outlook:" + folder_name,
+        entry_id=row.get("entry_id", ""),
+    )
+
+
+def _table_entry_ids(folder, restriction: str) -> list[str]:
+    """Entry IDs of mail items via the fast Table API (one COM call per row instead of ~10 per item)."""
+    table = folder.GetTable(restriction)
+    ids: list[str] = []
+    while not table.EndOfTable:
+        row = table.GetNextRow()
+        if str(row["MessageClass"] or "").upper().startswith("IPM.NOTE"):
+            ids.append(str(row["EntryID"]))
+    return ids
 
 
 def collect_calendar(config: dict, since_days: Optional[int] = None) -> list[Email]:

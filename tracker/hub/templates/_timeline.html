@@ -11,14 +11,13 @@
   <div class="panel-head"><h2>Projects</h2><span class="small muted">{{ project_cards|length }}</span></div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Project</th><th>Customer</th><th>Project #</th><th>SO/QTE</th><th>Stage</th><th>Progress</th><th>Ship</th><th>Next due</th></tr></thead>
+      <thead><tr><th>Customer</th><th>SO/QTE</th><th>Project #</th><th>Stage</th><th>Progress</th><th>Ship</th><th>Next due</th></tr></thead>
       <tbody>
       {% for card in project_cards %}
         <tr>
-          <td><a href="{{ url_for('project_page', key=card.key) }}">{{ card.name }}</a></td>
-          <td>{{ card.customer }}</td>
+          <td><a href="{{ url_for('project_page', key=card.key) }}" title="Folder: {{ card.name }}">{{ card.customer or "?" }}</a></td>
+          <td class="nowrap"><a href="{{ url_for('project_page', key=card.key) }}">{{ card.ident }}</a></td>
           <td class="nowrap">{{ card.project_no }}</td>
-          <td class="nowrap">{{ card.ident }}</td>
           <td>{{ card.stage or "Other" }}</td>
           <td class="nowrap">
             <div class="progress"><span style="width: {{ card.progress_pct }}%"></span></div>

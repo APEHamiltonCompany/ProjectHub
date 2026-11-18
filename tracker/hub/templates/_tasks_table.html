@@ -32,7 +32,7 @@
             data-category="{{ item.category }}"
             data-due="{{ item.due or '' }}"{% if item.id %} data-task-id="{{ item.id }}"{% endif %}>
           <td class="tick-col">{{ macros.tick(item) }}</td>
-          <td>{% if item.key %}<a href="{{ url_for('project_page', key=item.key) }}">{{ item.project_name }}</a>{% else %}<span class="muted">Personal</span>{% endif %}{% if item.customer or item.project_no %}<div class="small muted">{{ item.customer }}{% if item.customer and item.project_no %} &middot; {% endif %}{{ item.project_no }}</div>{% endif %}</td>
+          <td>{% if item.key %}<a href="{{ url_for('project_page', key=item.key) }}">{{ item.project_name }}</a>{% else %}<span class="muted">Personal</span>{% endif %}{% if item.project_no %}<div class="small muted">{{ item.project_no }}</div>{% endif %}</td>
           <td class="nowrap">{{ item.ident }}</td>
           <td>{{ item.stage }}</td>
           <td class="task-title">{{ item.title }}{% if item.recur %}<span class="tag tag-recur" title="{{ item.recur }}">&#128257; {{ item.recur_label }}</span>{% endif %}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{{ macros.time_chip(item) }}{% if item.key == "" %}{{ macros.ref_chip(item) }}{% endif %}{% if item.notes %}<div class="small muted">{{ item.notes }}</div>{% endif %}</td>

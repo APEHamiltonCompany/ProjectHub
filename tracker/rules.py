@@ -7,16 +7,66 @@ from typing import Iterable, Optional
 
 import yaml
 
-REPLY_PREFIX = re.compile(r"^\s*(re|fw|fwd)\s*:", re.I)
+REPLY_PREFIX = re.compile(r"^\s*(re|fw|fwd|automatic reply|auto reply|out of office)\s*:", re.I)
 
 
-def load_rules(path: str | Path) -> dict:
+def load_rules(path: str | Path, cfg: dict | None = None) -> dict:
+    """rules.yaml, with the triggers replaced by email_rules from config.yaml when set."""
     with open(path, "r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     data.setdefault("triggers", [])
     data.setdefault("workflow", [])
     data.setdefault("stages", [])
+    data.setdefault("buckets", [])
+    custom = email_rules_from_config(cfg or {}, data["triggers"])
+    if custom is not None:
+        data["triggers"] = custom
     return data
+
+
+def email_rules_from_config(cfg: dict, defaults: list[dict]) -> list[dict] | None:
+    rows = cfg.get("email_rules")
+    if not isinstance(rows, list) or not rows:
+        return None
+    base = {str(t.get("id")): t for t in defaults or []}
+    out = []
+    for row in rows:
+        if not isinstance(row, dict) or not str(row.get("id") or "").strip():
+            continue
+        trigger_id = str(row["id"]).strip()
+        merged = dict(base.get(trigger_id) or {})
+        merged.pop("subject_regex", None)
+        merged.pop("exclude_regex", None)
+        merged["id"] = trigger_id
+        if row.get("label"):
+            merged["label"] = str(row["label"])
+        merged["stage"] = str(row.get("stage") or merged.get("stage") or "")
+        merged["keywords"] = split_keywords(row.get("keywords"))
+        out.append(merged)
+    return out
+
+
+def split_keywords(value) -> list[str]:
+    if isinstance(value, str):
+        value = re.split(r"[,\n]", value)
+    return [str(item).strip() for item in value or [] if str(item).strip()]
+
+
+def keyword_pattern(keyword: str) -> str:
+    """Case-insensitive, spacing-tolerant pattern for a plain keyword ("A&T Notification", "WO firm")."""
+    parts = re.findall(r"\w+|[^\w\s]", keyword)
+    return r"\s*".join(re.escape(part) for part in parts)
+
+
+def trigger_matches(trigger: dict, subject: str) -> bool:
+    pattern = trigger.get("subject_regex")
+    if pattern and re.search(pattern, subject, re.I):
+        exclude = trigger.get("exclude_regex")
+        return not (exclude and re.search(exclude, subject, re.I))
+    for keyword in split_keywords(trigger.get("keywords")):
+        if re.search(keyword_pattern(keyword), subject, re.I):
+            return True
+    return False
 
 
 def is_reply(subject: str) -> bool:
@@ -26,19 +76,29 @@ def is_reply(subject: str) -> bool:
 def classify(subject: str, rules: dict) -> Optional[dict]:
     subject = subject or ""
     reply = is_reply(subject)
+    order = bucket_order(rules)
+    best = None
+    best_rank = -1
     for trigger in rules.get("triggers", []):
-        pattern = trigger.get("subject_regex")
-        if not pattern:
-            continue
-        if not re.search(pattern, subject, re.I):
-            continue
-        exclude = trigger.get("exclude_regex")
-        if exclude and re.search(exclude, subject, re.I):
+        if not trigger_matches(trigger, subject):
             continue
         if reply and trigger.get("no_reply", False):
             continue
-        return trigger
-    return None
+        stage = str(trigger.get("stage") or "")
+        rank = order.index(stage) if stage in order else -1
+        if best is None or rank > best_rank:
+            best, best_rank = trigger, rank
+    return best
+
+
+def bucket_order(rules: dict) -> list[str]:
+    """Board buckets in order; falls back to the trigger stages."""
+    order = [str(b) for b in rules.get("buckets") or []]
+    for trigger in rules.get("triggers") or []:
+        stage = str(trigger.get("stage") or "")
+        if stage and stage not in order:
+            order.append(stage)
+    return order
 
 
 def trigger_by_id(rules: dict, trigger_id: str) -> Optional[dict]:

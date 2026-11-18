@@ -1,17 +1,18 @@
 {% import "_macros.html" as macros %}
 <section class="board">
   {% for column in board_columns %}
-  <div class="board-col{% if not column.cards %} is-empty{% endif %}">
-    <div class="board-col-head"><h2>{{ column.stage }}</h2><span class="count">{{ column.cards|length }}</span></div>
+  <div class="board-col{% if not column.cards %} is-empty{% endif %}{% if column.collapsed %} is-collapsed{% endif %}">
+    <div class="board-col-head"><h2>{{ column.stage }}</h2><span class="count">{{ column.count if column.count is defined else column.cards|length }}</span></div>
     <div class="board-col-body">
+      {% if column.collapsed %}<p class="small muted"><a href="{{ url_for('projects_page', stage=column.stage) }}">{{ column.count }} completed project{{ '' if column.count == 1 else 's' }}: see Projects</a></p>{% endif %}
       {% for card in column.cards %}
       <article class="card" data-key="{{ card.key }}">
         <div class="card-stripe stripe-{{ 'bad' if card.overdue else 'warn' if card.due_soon else 'good' }}"></div>
         <div class="card-head">
-          <a class="card-name" href="{{ url_for('project_page', key=card.key) }}">{{ card.name }}</a>
+          <a class="card-name" href="{{ url_for('project_page', key=card.key) }}" title="Folder: {{ card.name }}">{{ card.customer or card.ident }}</a>
           {% if card.level %}<span class="badge level">{{ card.level }}</span>{% endif %}
         </div>
-        <div class="small muted">{{ card.customer }}{% if card.ident %} &middot; {{ card.ident }}{% endif %}</div>
+        {% if card.customer %}<div class="card-ident">{{ card.ident }}</div>{% endif %}
         <div class="card-row">
           <span class="chip">{{ card.stage or "Other" }}</span>
           {{ macros.ship_badge(card.ship_days) }}
