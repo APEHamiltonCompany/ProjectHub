@@ -42,19 +42,73 @@
   </div>
 </section>
 
+{% set offline_now = backup.offline.active %}
+<section class="panel" id="backup">
+  <div class="panel-head"><h2>Backup vault</h2>{% if backup.enabled %}<span class="small muted">daily at {{ backup.daily_time or "off" }}{% if backup.next_run %} &middot; next {{ backup.next_run }}{% endif %}</span>{% endif %}</div>
+  {% if not backup.enabled %}
+  <p class="small muted">No backup folder set. Add <span class="mono">backup_vault: path:</span> to the config file, or run setup.cmd.</p>
+  {% else %}
+  {% if offline_now %}<p class="backup-alert bad">Offline: the hub is working from the backup ({{ backup.offline.reason }}).</p>{% endif %}
+  <table class="backup-pairs">
+    <thead><tr><th>Folder</th><th>On R:</th><th>Backup</th></tr></thead>
+    <tbody>
+    {% for pair in backup.pairs %}
+      <tr>
+        <td>{{ pair.name }}</td>
+        <td class="mono small"><span class="dot dot-{{ 'good' if pair.source_ok else 'bad' }}"></span> {{ pair.source }}</td>
+        <td class="mono small"><span class="dot dot-{{ 'good' if pair.backup_ok else 'bad' }}"></span> {{ pair.backup }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="field-row">
+    <label class="field"><span>Daily backup time (HH:MM, empty = off)</span><input type="text" id="set-backup-time" value="{{ backup.daily_time }}" placeholder="14:00"></label>
+  </div>
+  <label class="check-field"><input type="checkbox" id="set-offline-auto"{% if backup.offline_fallback %} checked{% endif %}><span>Switch to the backup automatically when R: can't be reached</span></label>
+  <label class="check-field"><input type="checkbox" id="set-work-offline"{% if backup.work_offline %} checked{% endif %}><span>Work offline now (use the backup even if R: is reachable, for a planned outage)</span></label>
+  <p class="small muted">Click <strong>Save settings</strong> below to apply the time and the switches.</p>
+  <div class="row backup-actions">
+    <button type="button" class="btn primary" data-action="backup-export"{% if offline_now %} disabled{% endif %}>Back up now</button>
+    <button type="button" class="btn" data-action="backup-preview"{% if offline_now %} disabled{% endif %}>Import offline changes</button>
+    <span class="small muted" id="backup-state">{% if backup.job.running %}Backing up&hellip;{% endif %}</span>
+  </div>
+  <div class="small muted backup-last">
+    {% set last = backup.last_export %}
+    Last backup: {{ backup.last_export_at or "never" }}{% if last.pairs %} &middot;
+    {% for item in last.pairs %}{{ item.name }}: {{ item.copied }} copied, {{ item.deleted }} moved to .projecthub_deleted{% if item.skipped %}, {{ item.skipped|length }} skipped{% endif %}{% if item.pending %}, {{ item.pending }} waiting for import{% endif %}{% if item.conflicts %}, {{ item.conflicts|length }} conflicts{% endif %}{% if item.deletes_held %}, {{ item.deletes_held }} deletions held back{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% endif %}
+    {% if last.errors %}<div class="backup-alert warn">{{ last.errors|join("; ") }}</div>{% endif %}
+    {% for item in last.pairs if item.skipped %}<details><summary>{{ item.name }}: skipped files</summary><ul>{% for line in item.skipped[:200] %}<li class="mono">{{ line }}</li>{% endfor %}</ul></details>{% endfor %}
+    <div>Last import: {{ backup.last_import_at or "never" }}{% if backup.last_import.applied %} &middot; {{ backup.last_import.applied|length }} files{% endif %}{% if backup.last_import.kept %} &middot; replaced R: files kept in <span class="mono">{{ backup.last_import.kept }}</span>{% endif %}</div>
+  </div>
+  <div id="backup-preview" hidden>
+    <div class="row stage-bulk">
+      <button type="button" class="btn primary small" data-action="backup-apply">Apply selected</button>
+      <span class="small muted" id="backup-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="projects-table">
+        <thead><tr><th></th><th>Folder</th><th>File</th><th>Change</th><th>Modified in backup</th></tr></thead>
+        <tbody id="backup-rows"></tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
 <section class="panel">
   <div class="panel-head"><h2>Folders</h2></div>
+  {% if offline_now %}<p class="small muted">Folders can't be changed while working offline.</p>{% endif %}
   <div class="field-row">
-    <label class="field"><span>Project notes folder (.md vault)</span><input type="text" id="set-vault" value="{{ settings.vault }}"></label>
+    <label class="field"><span>Project notes folder (.md vault)</span><input type="text" id="set-vault" value="{{ settings.vault }}"{% if offline_now %} disabled{% endif %}></label>
   </div>
   <div class="field-row">
-    <label class="field"><span>Personal tasks file</span><input type="text" id="set-personal" value="{{ settings.personal_tasks_path }}"></label>
+    <label class="field"><span>Personal tasks file</span><input type="text" id="set-personal" value="{{ settings.personal_tasks_path }}"{% if offline_now %} disabled{% endif %}></label>
   </div>
   <div class="field-row">
-    <label class="field"><span>TimeEstimates template</span><input type="text" id="set-template" value="{{ settings.time_estimate_template }}"></label>
+    <label class="field"><span>TimeEstimates template</span><input type="text" id="set-template" value="{{ settings.time_estimate_template }}"{% if offline_now %} disabled{% endif %}></label>
   </div>
   <div class="field-row">
-    <label class="field"><span>Tracker sheet (file or folder)</span><input type="text" id="set-ape-sheet" value="{{ settings.ape_sheet_path }}"></label>
+    <label class="field"><span>Tracker sheet (file or folder)</span><input type="text" id="set-ape-sheet" value="{{ settings.ape_sheet_path }}"{% if offline_now %} disabled{% endif %}></label>
   </div>
   <p class="small muted">Leave a path empty to fall back to the value in the config file.</p>
 </section>

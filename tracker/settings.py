@@ -8,6 +8,7 @@ from pathlib import Path
 TOP_KEYS = ("vault", "personal_tasks_path", "time_estimate_template", "ape_sheet_path")
 HUB_KEYS = ("refresh_minutes", "due_soon_days", "theme", "auto_reload_pages")
 THEMES = ("system", "light", "dark")
+BACKUP_KEYS = ("work_offline", "offline_fallback", "daily_time")
 
 
 def settings_path_for(config_path: str | Path) -> Path:
@@ -70,8 +71,24 @@ def resolve_drives(value):
     return value
 
 
+def go_offline(cfg: dict) -> dict:
+    """Swap R: paths for the backup vault when R: is unreachable or Work offline is on (see tracker/backup.py)."""
+    from tracker import backup
+
+    return backup.apply_offline(cfg, resolve=lambda text: unc_path(text) or text)
+
+
 def apply_overlay(cfg: dict, overlay: dict) -> dict:
     merged = dict(cfg or {})
+    saved = overlay.get("backup")
+    if isinstance(saved, dict):
+        conf = dict(merged.get("backup_vault") or {})
+        for key in ("work_offline", "offline_fallback"):
+            if isinstance(saved.get(key), bool):
+                conf[key] = saved[key]
+        if isinstance(saved.get("daily_time"), str):
+            conf["daily_time"] = saved["daily_time"].strip()
+        merged["backup_vault"] = conf
     hub = dict(merged.get("hub") or {})
     for key in TOP_KEYS:
         value = overlay.get(key)

@@ -18,6 +18,7 @@ EXAMPLE_PATH = HERE / "config.example.yaml"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tracker import backup as backup_mod  # noqa: E402
 from tracker import rules as rules_mod  # noqa: E402
 from tracker import setup_wizard  # noqa: E402
 from tracker.matcher import LAYOUT_CUSTOMER, LAYOUTS  # noqa: E402
@@ -81,6 +82,7 @@ def form_from_config(cfg: dict) -> dict:
     ape = cfg.get("ape_sheet") or {}
     hub = cfg.get("hub") or {}
     me = cfg.get("me") or {}
+    vault_backup = cfg.get("backup_vault") if isinstance(cfg.get("backup_vault"), dict) else {}
     return {
         "name": str(me.get("name") or ""),
         "email": str(me.get("email") or ""),
@@ -114,6 +116,14 @@ def form_from_config(cfg: dict) -> dict:
         "holidays": "\n".join(str(item) for item in cfg.get("holidays") or []),
         "pm_schedule_include": str(cfg.get("pm_schedule_include") or ""),
         "install_dashboard_note": bool(cfg.get("install_dashboard_note", False)),
+        "backup_path": str(vault_backup.get("path") or ""),
+        "backup_daily_time": str(vault_backup.get("daily_time") or ""),
+        "backup_offline_fallback": bool(vault_backup.get("offline_fallback", True)),
+        "backup_folders": "\n".join(
+            "%s => %s" % (item.get("source") or "", item.get("backup") or "")
+            for item in vault_backup.get("folders") or []
+            if isinstance(item, dict)
+        ),
     }
 
 
@@ -283,6 +293,37 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
         errors.append("PM schedule pattern is not a valid regex: %s" % exc)
     cfg["pm_schedule_include"] = pattern
     cfg["install_dashboard_note"] = bool(form["install_dashboard_note"])
+
+    if "backup_path" in form:
+        vault_backup = dict(cfg.get("backup_vault") or {})
+        backup_path = _path(form.get("backup_path", ""))
+        daily = str(form.get("backup_daily_time") or "").strip()
+        if daily and backup_mod.parse_time(daily) is None:
+            errors.append("Daily backup time must look like 14:00.")
+        pairs = []
+        for line in str(form.get("backup_folders") or "").splitlines():
+            if not line.strip():
+                continue
+            if "=>" not in line:
+                errors.append("Extra backup folder must look like  R:/source => E:/backup : %s" % line.strip())
+                continue
+            source, target = (part.strip() for part in line.split("=>", 1))
+            if not source or not target:
+                errors.append("Extra backup folder needs both a source and a backup folder: %s" % line.strip())
+                continue
+            pairs.append({"source": _path(source), "backup": _path(target)})
+        if backup_path and vault and _path(backup_path).lower() == vault.lower():
+            errors.append("Backup vault folder must be different from the project folder.")
+        if backup_path and not Path(backup_path).is_dir():
+            warnings.append("Backup vault folder does not exist yet; it will be created on the first backup: %s" % backup_path)
+        if pairs and not backup_path:
+            warnings.append("Extra backup folders are ignored until a backup vault folder is set.")
+        vault_backup["path"] = backup_path
+        vault_backup["daily_time"] = daily
+        vault_backup["offline_fallback"] = bool(form.get("backup_offline_fallback", True))
+        vault_backup["folders"] = pairs
+        if backup_path or pairs or cfg.get("backup_vault"):
+            cfg["backup_vault"] = vault_backup
     return cfg, errors, warnings
 
 
@@ -501,6 +542,26 @@ def run_ui() -> None:
     )
     entry(ape, row, "ape_url", "Sheet URL", "SharePoint link shown in the hub.")
 
+    vault_backup = section("6. Backup vault (offline copy of your projects)")
+    row = entry(
+        vault_backup, 0, "backup_path", "Backup vault folder",
+        "A copy of the project folder, e.g. E:/My Projects on an external drive, or a folder on C:. Blank = no backup.", "dir",
+    )
+    row = entry(
+        vault_backup, row, "backup_daily_time", "Daily backup time",
+        "HH:MM, e.g. 14:00. A backup missed while the PC was off runs at the next start. Blank = only by hand.",
+    )
+    row = check(
+        vault_backup, row, "backup_offline_fallback", "Work from the backup automatically when R: is unreachable",
+        "You can also switch to offline by hand in the hub (Settings > Backup vault).",
+    )
+    ttk.Label(vault_backup, text="Extra folders").grid(row=row, column=0, sticky="nw", padx=(0, 8))
+    backup_folders = tk.Text(vault_backup, height=3, width=60)
+    backup_folders.insert("1.0", form["backup_folders"])
+    backup_folders.grid(row=row, column=1, sticky="ew")
+    texts["backup_folders"] = backup_folders
+    hint(vault_backup, row + 1, "One per line:  R:/APE_AE/TEMPLATES => E:/APE_AE_RDrive/TEMPLATES")
+
     toggle_text = tk.StringVar(value="Show advanced settings")
     advanced_holder = ttk.Frame(body)
     toggle = ttk.Button(body, textvariable=toggle_text)
@@ -557,6 +618,7 @@ def run_ui() -> None:
             for rule in rule_rows
         ]
         values["holidays"] = texts["holidays"].get("1.0", "end")
+        values["backup_folders"] = texts["backup_folders"].get("1.0", "end")
         return values
 
     def save() -> bool:

@@ -19,6 +19,7 @@ import yaml
 from flask import Flask, abort, g, jsonify, render_template, request, url_for
 from markupsafe import Markup, escape
 
+from tracker import backup as backup_mod
 from tracker import locking, matcher, notes
 from tracker import project_files
 from tracker import projects as projects_mod
@@ -64,7 +65,7 @@ def _load_config(path: str | Path) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh) or {}
     cfg = settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
-    return settings_mod.resolve_drives(cfg)
+    return settings_mod.resolve_drives(settings_mod.go_offline(cfg))
 
 
 def _ui_prefs(raw: dict) -> dict:
@@ -857,11 +858,89 @@ def create_app(
         threading.Thread(target=run_tracker, daemon=True).start()
         return True
 
+    backup_dir = Path(cfg.get("backup_data_dir") or backup_mod.DATA_DIR)
+    backup_job: dict = {"running": False, "kind": "", "pair": "", "done": 0, "total": 0, "file": "", "result": None}
+    BACKUP_RETRY_MINUTES = 60
+    OFFLINE_CHECK_SECONDS = 120
+
+    def backup_status() -> dict:
+        return backup_mod.load_status(backup_dir)
+
+    def note_offline_state() -> None:
+        info = cfg.get("offline") or {}
+        status = backup_status()
+        if info.get("active") and not status.get("offline_since"):
+            backup_mod.update_status({"offline_since": datetime.now().astimezone().isoformat(timespec="seconds")}, backup_dir)
+        elif not info.get("active") and status.get("offline_since") and not status.get("back_online_at"):
+            backup_mod.update_status({"back_online_at": datetime.now().astimezone().isoformat(timespec="seconds")}, backup_dir)
+
+    def reload_config() -> bool:
+        """Re-read the config (re-checks whether R: is reachable). True when the hub switched vault."""
+        before = live["vault"]
+        new_cfg = _load_config(config_path)
+        cfg.clear()
+        cfg.update(new_cfg)
+        apply_settings()
+        note_offline_state()
+        return live["vault"] != before
+
+    def run_export(auto: bool = False) -> None:
+        def progress(name: str, index: int, total: int, rel: str) -> None:
+            backup_job.update(pair=name, done=index, total=total, file=rel)
+
+        started = datetime.now().astimezone().isoformat(timespec="seconds")
+        try:
+            result = backup_mod.export_all(dict(cfg), backup_dir, progress)
+        except Exception as exc:
+            result = {"at": started, "pairs": [], "errors": [str(exc)]}
+        result["auto"] = auto
+        changes = {"last_attempt_at": started, "last_export": result}
+        if result["pairs"]:
+            changes["last_export_at"] = result["at"]
+        backup_mod.update_status(changes, backup_dir)
+        backup_job.update(running=False, result=result, file="")
+
+    def start_backup(auto: bool = False) -> bool:
+        with mutex:
+            if backup_job["running"]:
+                return False
+            backup_job.update(running=True, kind="export", pair="", done=0, total=0, file="", result=None)
+        threading.Thread(target=run_export, args=(auto,), daemon=True).start()
+        return True
+
+    def backup_tick(now: datetime) -> None:
+        if backup_job["running"] or not backup_mod.enabled(cfg):
+            return
+        status = backup_status()
+        if not backup_mod.export_due(cfg, status, now):
+            return
+        try:
+            tried = datetime.fromisoformat(status.get("last_attempt_at") or "").astimezone().replace(tzinfo=None)
+        except ValueError:
+            tried = None
+        if tried and (now - tried) < timedelta(minutes=BACKUP_RETRY_MINUTES):
+            return
+        start_backup(auto=True)
+
     def refresh_loop() -> None:
+        note_offline_state()
         run_tracker()
         last = time.monotonic()
+        checked = time.monotonic()
         while True:
             time.sleep(5)
+            if backup_mod.enabled(cfg) and time.monotonic() - checked >= OFFLINE_CHECK_SECONDS:
+                checked = time.monotonic()
+                try:
+                    if reload_config() and not run_state["running"]:
+                        run_tracker()
+                        last = time.monotonic()
+                except Exception:
+                    pass
+            try:
+                backup_tick(datetime.now())
+            except Exception:
+                pass
             minutes = live["refresh_minutes"]
             if minutes <= 0 or run_state["running"]:
                 continue
@@ -1543,6 +1622,7 @@ def create_app(
             "zooms": ZOOMS,
             "nav_projects": nav_projects(),
             "ape_sheet": snapshot().get("ape_sheet") or {},
+            "backup_line": backup_line(),
         }
 
     @app.get("/")
@@ -3609,6 +3689,7 @@ def create_app(
             settings_path=str(settings_path),
             settings=effective_settings(),
             layouts=LAYOUTS,
+            backup=backup_view(),
         )
 
     @app.post("/api/settings")
@@ -3640,6 +3721,9 @@ def create_app(
             if not isinstance(value, bool):
                 return jsonify({"error": "auto_reload_pages must be true or false"}), 400
             overlay["auto_reload_pages"] = value
+        if (cfg.get("offline") or {}).get("active"):
+            for key in ("vault", "personal_tasks_path", "time_estimate_template", "ape_sheet_path"):
+                payload.pop(key, None)
         if "vault" in payload:
             value = _clean_path(payload.get("vault"))
             if not value:
@@ -3674,12 +3758,29 @@ def create_app(
                 overlay["ape_sheet_path"] = value
             else:
                 return jsonify({"error": "ape_sheet_path must be an existing .xlsx file or folder"}), 400
+        if "backup" in payload:
+            value = payload.get("backup")
+            if not isinstance(value, dict):
+                return jsonify({"error": "backup must be an object"}), 400
+            saved = dict(overlay.get("backup") or {})
+            for key in ("work_offline", "offline_fallback"):
+                if key in value:
+                    if not isinstance(value[key], bool):
+                        return jsonify({"error": "%s must be true or false" % key}), 400
+                    saved[key] = value[key]
+            if "daily_time" in value:
+                text = str(value.get("daily_time") or "").strip()
+                if text and backup_mod.parse_time(text) is None:
+                    return jsonify({"error": "daily_time must be HH:MM (24 h) or empty"}), 400
+                saved["daily_time"] = text
+            overlay["backup"] = saved
         settings_mod.save_overlay(settings_path, overlay)
         before_vault = live["vault"]
         new_cfg = _load_config(config_path)
         cfg.clear()
         cfg.update(new_cfg)
         apply_settings()
+        note_offline_state()
         if ui_update:
             def apply(state: dict) -> dict:
                 state["ui"] = {**_ui_prefs(state.get("ui") or {}), **ui_update}
@@ -3691,6 +3792,113 @@ def create_app(
             start_run()
             rerun = True
         return jsonify({"ok": True, "settings": effective_settings(), "rerun": rerun})
+
+    def _when(value: str) -> str:
+        try:
+            return datetime.fromisoformat(value).astimezone().strftime("%a %d %b %H:%M")
+        except (TypeError, ValueError):
+            return ""
+
+    def backup_line() -> dict:
+        """Short status for the sidebar and the offline banners (no drive checks, so it's cheap)."""
+        if not backup_mod.enabled(cfg):
+            return {}
+        info = cfg.get("offline") or {}
+        status = backup_status()
+        out = {"offline": bool(info.get("active")), "reason": info.get("reason") or "", "back": False, "level": "ok"}
+        if out["offline"]:
+            out.update(level="bad", text="Offline: working from the backup vault")
+            return out
+        if status.get("offline_since") and status.get("back_online_at"):
+            out["back"] = True
+        if backup_job["running"]:
+            out["text"] = "Backing up\u2026"
+            return out
+        last = status.get("last_export_at") or ""
+        errors = (status.get("last_export") or {}).get("errors") or []
+        out["text"] = "Backed up %s" % _when(last) if last else "Not backed up yet"
+        try:
+            age = datetime.now().astimezone() - datetime.fromisoformat(last).astimezone()
+        except (TypeError, ValueError):
+            age = None
+        if errors or age is None or age > timedelta(hours=26):
+            out["level"] = "warn"
+        if errors:
+            out["text"] += " (last run had errors)"
+        if info.get("reason") and not info.get("active"):
+            out.update(level="bad", text=info["reason"])
+        return out
+
+    def backup_view() -> dict:
+        conf = backup_mod.settings(cfg)
+        status = backup_status()
+        daily = backup_mod.parse_time(conf.get("daily_time"))
+        rows = []
+        for pair in backup_mod.pairs(cfg):
+            rows.append(dict(pair, source_ok=backup_mod.reachable(pair["source"]), backup_ok=backup_mod.reachable(pair["backup"])))
+        info = cfg.get("offline") or {}
+        return {
+            "enabled": backup_mod.enabled(cfg),
+            "pairs": rows,
+            "daily_time": str(conf.get("daily_time") or ""),
+            "next_run": backup_mod.next_slot(datetime.now(), daily).strftime("%a %d %b %H:%M") if daily else "",
+            "offline_fallback": bool(conf.get("offline_fallback", True)),
+            "work_offline": bool(conf.get("work_offline")),
+            "offline": info,
+            "last_export_at": _when(status.get("last_export_at") or ""),
+            "last_export": status.get("last_export") or {},
+            "last_import_at": _when(status.get("last_import_at") or ""),
+            "last_import": status.get("last_import") or {},
+            "offline_since": _when(status.get("offline_since") or ""),
+            "job": dict(backup_job),
+        }
+
+    @app.post("/api/backup/export")
+    def api_backup_export():
+        if not backup_mod.enabled(cfg):
+            return jsonify({"error": "Set backup_vault.path in the config first"}), 400
+        if (cfg.get("offline") or {}).get("active"):
+            return jsonify({"error": "You're working offline: there's nothing on R: to back up right now"}), 409
+        if not start_backup():
+            return jsonify({"error": "A backup is already running"}), 409
+        return jsonify({"ok": True})
+
+    @app.get("/api/backup/status")
+    def api_backup_status():
+        return jsonify({"job": dict(backup_job), "line": backup_line()})
+
+    @app.post("/api/backup/import/preview")
+    def api_backup_import_preview():
+        if not backup_mod.enabled(cfg):
+            return jsonify({"error": "Set backup_vault.path in the config first"}), 400
+        if (cfg.get("offline") or {}).get("active"):
+            return jsonify({"error": "R: isn't connected yet; import once it's back"}), 409
+        return jsonify(backup_mod.preview_import(dict(cfg), backup_dir))
+
+    @app.post("/api/backup/import/apply")
+    def api_backup_import_apply():
+        payload = request.get_json(silent=True) or {}
+        items = payload.get("items")
+        if not isinstance(items, list) or not items or len(items) > 50000:
+            return jsonify({"error": "nothing selected"}), 400
+        if (cfg.get("offline") or {}).get("active"):
+            return jsonify({"error": "R: isn't connected yet; import once it's back"}), 409
+        picks = [{"pair": str((item or {}).get("pair") or ""), "rel": str((item or {}).get("rel") or "")} for item in items]
+        with mutex:
+            with locking.file_lock(lock_file):
+                result = backup_mod.apply_import(dict(cfg), picks, backup_root(), backup_dir)
+        backup_mod.update_status(
+            {"last_import_at": datetime.now().astimezone().isoformat(timespec="seconds"), "last_import": result,
+             "offline_since": "", "back_online_at": ""},
+            backup_dir,
+        )
+        start_run()
+        return jsonify(dict(result, ok=not result["failed"]))
+
+    @app.post("/api/backup/dismiss")
+    def api_backup_dismiss():
+        backup_mod.update_status({"offline_since": "", "back_online_at": ""}, backup_dir)
+        return jsonify({"ok": True})
 
     if not no_refresh:
         threading.Thread(target=refresh_loop, daemon=True).start()

@@ -39,6 +39,7 @@
         <button type="button" class="layout-btn{% if layout == 'focus' %} active{% endif %}" data-layout="focus"{% if request.endpoint != 'dashboard' %} disabled aria-disabled="true"{% endif %}>Focus</button>
       </div>
       {% endif %}
+      {% if backup_line.text %}<a class="side-backup side-backup-{{ backup_line.level }}" href="{{ url_for('settings_page') }}#backup" title="{{ backup_line.reason or 'Backup vault' }}">{{ backup_line.text }}</a>{% endif %}
       <div class="side-refresh">
         <button id="refresh-now" type="button" class="btn">Refresh now</button>
         <span id="refresh-state" class="side-refresh-state" data-running="{{ '1' if running else '0' }}">Last refresh: {{ generated or "never" }}</span>
@@ -64,6 +65,8 @@
       </div>
     </header>
     <main class="content" style="zoom: {{ ui.zoom / 100 }}">
+{% if backup_line.offline %}<div class="offline-banner bad">Offline: working from the backup vault. {{ backup_line.reason }}. Changes are saved in the backup; import them from <a href="{{ url_for('settings_page') }}#backup">Settings</a> when R: is back.</div>
+{% elif backup_line.back %}<div class="offline-banner warn">R: is back. Review the files changed while you were offline: <a href="{{ url_for('settings_page') }}#backup">Import offline changes</a> <button type="button" class="btn small ghost" data-action="backup-dismiss">Dismiss</button></div>{% endif %}
 {% block content %}{% endblock %}
     </main>
   </div>

@@ -56,6 +56,7 @@ Then check `tracker\config.yaml`:
 - `ape_sheet.shortcut`: the folder holding the `APE Project Tracking*.url` shortcut (`R:/APE_AE`), or the `.url` file itself. The whole team can use the same shortcut. `ape_sheet.download_hours` (12): how old the downloaded copy can get before the hub downloads a new one. See 2.10.
 - `email_rules`: the email rules from the setup window (see 2.6). Leave it out to use the defaults in `tracker\rules.yaml`.
 - `hub.port` (8765), `hub.refresh_minutes` (15), `hub.toast` (true = Windows notification for new assignments).
+- `backup_vault`: the offline copy of your projects (see 2.12). `path` (e.g. `E:/My Projects`, blank = off), `daily_time` (`14:00`), `offline_fallback` (true = work from the copy when R: can't be reached), `folders` (extra folders, each with `source` and `backup`).
 - `tools.wire_diagram_builder`: path to `WireDiagramBuilder.exe`. The launch shortcuts in `tracker\rules.yaml` refer to it as `tool:wire_diagram_builder`; leave it empty to hide those buttons.
 
 `tracker\config.yaml` is local and not tracked by git; `tracker\config.example.yaml` is the template.
@@ -390,6 +391,26 @@ Edits are stored in the hub's own `state.json` and never change your notes or th
 
 ---
 
+### 2.12 Backup vault and working offline
+The hub keeps a copy of your project folder (and any extra folders, such as `R:/APE_AE/TEMPLATES`) on an external drive or on C:, so you can keep working when R: is down. Set it up in the setup window (section 6, Backup vault) or under `backup_vault` in `tracker\config.yaml`.
+
+**Daily backup.** Every day after `daily_time` (e.g. 14:00) the hub copies whatever changed on R: to the backup. If the PC was off at that time, the backup runs the next time the hub starts. **Settings > Backup vault > Back up now** runs one straight away and shows its progress. All files are copied. The sidebar shows the last backup: grey = OK, amber = more than a day old or the last run had errors, red = offline or unreachable.
+- A file deleted on R: is not deleted from the backup; it is moved to `<backup>\.projecthub_deleted\<date>\`.
+- Files that are open (locked) are skipped and retried on the next backup; they are listed under **skipped files** on the Settings page.
+- If a scan of R: fails part-way, or more than 50 files (and over a quarter of all files) disappear at once, the backup holds those deletions back instead of moving them.
+- The backup never overwrites a file that was changed in the backup; those wait for an import (below).
+
+**Working offline.** When R: can't be reached, the hub switches to the backup by itself (turn this off with **Switch to the backup automatically when R: can't be reached**). To switch before a planned outage, tick **Work offline now**. While offline, a red banner is shown on every page, all project paths point to the backup, and the daily backup pauses.
+
+**Back online.** When R: is reachable again (or you untick Work offline), the hub switches back and shows "R: is back". Nothing is merged automatically. Click **Import offline changes** to see a list of what changed in the backup, tick what you want, and click **Apply**:
+- **new / changed**: copied to R: (ticked).
+- **conflict** (changed on both sides): R: keeps its version and the offline one is saved beside it as `name (offline YYYY-MM-DD).ext` (ticked).
+- **deleted** in the backup: deleted from R: only if you tick it.
+- **newer on backup** and **only in the older backup copy** (first run only, see below): copied to R: only if you tick it.
+Any R: file that is replaced or deleted is first copied to `backups\<date-time>_import\`.
+
+**First backup into an existing copy.** If the backup folder already holds an older copy, the first backup copies everything that is newer on R:, never overwrites a file that is newer in the backup, and leaves files that only exist in the backup alone (often files since moved or deleted on R:). Those show up in **Import offline changes** (unticked) so you can decide.
+
 ## Part 3: Monday update (7 AM, before the 8 AM meeting)
 1. Click **Refresh now** on the dashboard, or rely on the 06:30 run.
 2. Open `http://localhost:8765/monday`.
@@ -428,6 +449,8 @@ Ticks made outside the hub (typed directly in the `.md`) show up in the note but
 | "Open as tab group" does nothing | The extension isn't loaded (see 1.7), or it was reloaded; click **Reload** on **Project Hub Tab Groups** in `chrome://extensions`, then refresh the hub page. The button always ends with a toast saying why it failed. |
 | A recurring task didn't add the next copy | The task must have a `🔁` rule and be ticked `[x]` or `[-]`. If an open copy with the same title, rule and due date already exists, no second copy is added. |
 | Save shows a conflict warning | The file changed elsewhere. Reload to see the latest version, or overwrite on purpose. |
+| Backup says "deletions held back" | Many files disappeared from R: at once (or part of R: couldn't be read), so the backup kept them. Check R:; if the deletions are real, the held files stay in the backup and can be removed by hand. |
+| Hub is offline although R: works | **Work offline now** is ticked under Settings > Backup vault, or R: was unreachable at the last check (rechecked every 2 minutes). |
 | Project page said Not Found right after Create | Fixed: the page now waits for the refresh and shows "Setting up project" until the project is indexed. If it stays there, check `output\hub_last_run.log`. |
 
 Logs: `output\last_run.log` (tracker runs), `output\hub_last_run.log` (latest hub refresh), `output\scheduler.log` (06:30 task), `output\hub.log` (hidden hub). A static fallback dashboard is written to `output\dashboard.html` on every run.
@@ -437,6 +460,7 @@ Logs: `output\last_run.log` (tracker runs), `output\hub_last_run.log` (latest hu
 ## Part 6: Backups and restore
 - Before the one-time note migrations, copies of every note were saved under `backups\<date-time>-...\`.
 - OneDrive version history is also available for every note (right-click > Version history).
+- The backup vault (2.12) keeps a daily copy of the project folder; deleted files go to `<backup>\.projecthub_deleted\`, and R: files replaced by an import go to `backups\<date-time>_import\`.
 - `tracker\state.json` stores pending assignments, triage choices, due overrides, tick dates and your added links. Copy it if you want a backup.
 
 ---

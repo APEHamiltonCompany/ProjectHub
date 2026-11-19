@@ -164,6 +164,7 @@ class PromptFlowTests(unittest.TestCase):
                     "",
                     "",
                     "9100",
+                    "",
                     "n",
                 ]
             )

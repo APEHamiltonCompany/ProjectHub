@@ -130,6 +130,24 @@ ape_sheet:
   stale_hours: 48
   url: "https://hamiltonmarketing.sharepoint.com/:x:/s/RNOAPE/IQDm4sasM7CTR6tIlW4RZwudAQ5vAffff0kaw_GEz2RITfA?e=Jraqhi"
 
+# --- Backup vault (offline copy of the project folder) ----------------------------
+# The hub copies the vault (and any extra folders) here every day at daily_time; a backup missed while the PC
+# was off runs at the next start. All files are copied. Files deleted on R: are moved to
+# <backup>/.projecthub_deleted/<date>/. When R: is unreachable (offline_fallback) or "Work offline" is switched
+# on in Settings, the hub works from these copies; changes made offline are brought back with
+# Settings > Backup vault > "Import offline changes" (preview first, nothing is merged automatically).
+backup_vault:
+  # e.g. "E:/My Projects" (external drive) or "C:/ProjectHub Backup/My Projects". Blank = no backup.
+  path: ""
+  # HH:MM, blank = only when "Back up now" is clicked.
+  daily_time: "14:00"
+  # Switch to the backup automatically when the vault cannot be reached.
+  offline_fallback: true
+  # Extra folders to keep a copy of, e.g. the project templates.
+  folders: []
+  #  - source: "R:/APE_AE/TEMPLATES"
+  #    backup: "E:/APE_AE_RDrive/TEMPLATES"
+
 # --- Optional tools and file templates -------------------------------------------
 tools:
   # WireDiagramBuilder.exe, launched from wiring-diagram tasks.

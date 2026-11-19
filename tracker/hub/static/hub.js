@@ -727,6 +727,10 @@
     if (action === "sync-preview") { return syncPreview(target); }
     if (action === "sync-apply") { return syncApply(target); }
     if (action === "so-add") { return addSo(target); }
+    if (action === "backup-export") { return backupExport(target); }
+    if (action === "backup-preview") { return backupPreview(target); }
+    if (action === "backup-apply") { return backupApply(target); }
+    if (action === "backup-dismiss") { return post("/api/backup/dismiss", {}).then(function () { window.location.reload(); }).catch(fail); }
     if (action === "so-dismiss") { return dismissSo(target); }
     if (action === "launch-set") { return setLaunch(target); }
     if (action === "launch-reset") { return resetLaunch(target); }
@@ -770,6 +774,7 @@
     if (event.target.id === "stage-select-all") { selectAllStage(event.target.checked); return; }
     if (event.target.id === "sync-select-all") { syncSelectAll(event.target.checked); return; }
     if (event.target.classList && event.target.classList.contains("sync-pick")) { syncCount(); return; }
+    if (event.target.classList && event.target.classList.contains("backup-pick")) { backupCount(); return; }
     if (event.target.classList && event.target.classList.contains("stage-pick")) { countStagePicks(); return; }
     var cell = event.target.closest(".ts-cell");
     if (!cell) { return; }
@@ -1258,6 +1263,91 @@
       if (notes.length) { text += " - " + notes.join("; "); }
       toast(text);
       window.setTimeout(function () { window.location.reload(); }, notes.length ? 8000 : 800);
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  var BACKUP_KINDS = {
+    "new": "new in backup",
+    "changed": "changed in backup",
+    "conflict": "changed on both: saved beside the R: file as (offline date)",
+    "newer": "newer in backup (no sync record yet)",
+    "old": "only in the older backup copy (from before the first backup)",
+    "deleted": "deleted in backup: tick to delete from R:"
+  };
+
+  function backupCount() {
+    var box = document.getElementById("backup-count");
+    var picked = document.querySelectorAll(".backup-pick:checked").length;
+    var total = document.querySelectorAll(".backup-pick").length;
+    if (box) { box.textContent = picked + " of " + total + " selected"; }
+  }
+
+  function backupPoll() {
+    var state = document.getElementById("backup-state");
+    fetch("/api/backup/status").then(function (r) { return r.json(); }).then(function (data) {
+      var job = data.job || {};
+      if (job.running) {
+        if (state) {
+          state.textContent = "Backing up " + (job.pair || "") + (job.total ? ": " + job.done + " of " + job.total + " files" : "\u2026") +
+            (job.file ? " (" + job.file + ")" : "");
+        }
+        window.setTimeout(backupPoll, 1500);
+        return;
+      }
+      var result = job.result || {};
+      var parts = (result.pairs || []).map(function (item) { return item.name + ": " + item.copied + " copied"; });
+      toast("Backup finished" + (parts.length ? " - " + parts.join(", ") : "") + ((result.errors || []).length ? " - " + result.errors.join("; ") : ""));
+      window.setTimeout(function () { window.location.reload(); }, 1500);
+    }).catch(function () { window.setTimeout(backupPoll, 5000); });
+  }
+
+  function backupExport(button) {
+    busy(button, true);
+    post("/api/backup/export", {}).then(function () { backupPoll(); }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function backupPreview(button) {
+    var state = document.getElementById("backup-state");
+    var panel = document.getElementById("backup-preview");
+    var body = document.getElementById("backup-rows");
+    busy(button, true);
+    if (state) { state.textContent = "Comparing the backup with R:\u2026"; }
+    post("/api/backup/import/preview", {}).then(function (data) {
+      busy(button, false);
+      var items = data.items || [];
+      if (state) { state.textContent = items.length + " file" + (items.length === 1 ? "" : "s") + " changed in the backup." + ((data.errors || []).length ? " " + data.errors.join("; ") : ""); }
+      body.innerHTML = items.map(function (item) {
+        return "<tr><td><input type=\"checkbox\" class=\"backup-pick\" data-pair=\"" + esc(item.pair) + "\" data-rel=\"" + esc(item.rel) + "\"" +
+          (item.checked ? " checked" : "") + " aria-label=\"Import " + esc(item.rel) + "\"></td><td>" + esc(item.pair) + "</td>" +
+          "<td class=\"mono small\">" + esc(item.rel) + "</td><td class=\"small\">" + esc(BACKUP_KINDS[item.kind] || item.kind) + "</td>" +
+          "<td class=\"nowrap small\">" + esc(item.modified || "") + "</td></tr>";
+      }).join("");
+      panel.hidden = !items.length;
+      backupCount();
+    }).catch(function (error) {
+      busy(button, false);
+      if (state) { state.textContent = ""; }
+      fail(error);
+    });
+  }
+
+  function backupApply(button) {
+    var items = Array.prototype.map.call(document.querySelectorAll(".backup-pick:checked"), function (box) {
+      return { pair: box.getAttribute("data-pair"), rel: box.getAttribute("data-rel") };
+    });
+    if (!items.length) { toast("Tick the files to import first"); return; }
+    busy(button, true);
+    post("/api/backup/import/apply", { items: items }).then(function (data) {
+      var text = "Imported " + (data.applied || []).length + " file" + ((data.applied || []).length === 1 ? "" : "s");
+      if ((data.failed || []).length) { text += " - failed: " + data.failed.join("; "); }
+      toast(text);
+      window.setTimeout(function () { window.location.reload(); }, (data.failed || []).length ? 8000 : 1200);
     }).catch(function (error) {
       busy(button, false);
       fail(error);
@@ -2376,7 +2466,10 @@
       var personal = document.getElementById("set-personal");
       var template = document.getElementById("set-template");
       var apeSheet = document.getElementById("set-ape-sheet");
-      post("/api/settings", {
+      var backupTime = document.getElementById("set-backup-time");
+      var offlineAuto = document.getElementById("set-offline-auto");
+      var workOffline = document.getElementById("set-work-offline");
+      var payload = {
         refresh_minutes: refresh ? parseInt(refresh.value, 10) : 15,
         due_soon_days: dueSoon ? parseInt(dueSoon.value, 10) : 7,
         theme: theme ? theme.value : "system",
@@ -2388,7 +2481,14 @@
         personal_tasks_path: personal ? personal.value : "",
         time_estimate_template: template ? template.value : "",
         ape_sheet_path: apeSheet ? apeSheet.value : ""
-      }).then(function (data) {
+      };
+      [["vault", vault], ["personal_tasks_path", personal], ["time_estimate_template", template], ["ape_sheet_path", apeSheet]].forEach(function (pair) {
+        if (pair[1] && pair[1].disabled) { delete payload[pair[0]]; }
+      });
+      if (backupTime) {
+        payload.backup = { daily_time: backupTime.value, offline_fallback: !!(offlineAuto && offlineAuto.checked), work_offline: !!(workOffline && workOffline.checked) };
+      }
+      post("/api/settings", payload).then(function (data) {
         toast("Settings saved" + (data.rerun ? " - refreshing projects from the new folder" : ""));
         window.setTimeout(function () { window.location.reload(); }, 900);
       }).catch(fail);

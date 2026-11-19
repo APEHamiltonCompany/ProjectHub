@@ -37,7 +37,7 @@ def load_config(path: str | Path) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh) or {}
     cfg = settings_mod.apply_overlay(cfg, settings_mod.load_overlay(settings_mod.settings_path_for(path)))
-    return settings_mod.resolve_drives(cfg)
+    return settings_mod.resolve_drives(settings_mod.go_offline(cfg))
 
 
 def render_template(text: str, values: dict) -> str:

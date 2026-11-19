@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from tracker import backup as backup_mod
 from tracker import settings as settings_mod
 
 HERE = Path(__file__).resolve().parent
@@ -120,6 +121,13 @@ def build_config(base: dict, answers: dict) -> dict:
     hub = dict(cfg.get("hub") or {})
     hub["port"] = int(answers.get("port") or 8765)
     cfg["hub"] = hub
+    if "backup_path" in answers:
+        vault_backup = dict(cfg.get("backup_vault") or {})
+        vault_backup["path"] = _fwd(answers.get("backup_path"))
+        vault_backup["daily_time"] = str(answers.get("backup_daily_time") or "")
+        vault_backup.setdefault("offline_fallback", True)
+        vault_backup.setdefault("folders", [])
+        cfg["backup_vault"] = vault_backup
     return cfg
 
 
@@ -144,6 +152,8 @@ def stored_answers(base: dict) -> dict:
         "time_estimate_template": base.get("time_estimate_template") or "",
         "wire_diagram_builder": (base.get("tools") or {}).get("wire_diagram_builder") or "",
         "port": (base.get("hub") or {}).get("port") or "",
+        "backup_path": (base.get("backup_vault") or {}).get("path") or "",
+        "backup_daily_time": (base.get("backup_vault") or {}).get("daily_time") or "",
     }
 
 
@@ -204,6 +214,18 @@ def prompt_answers(defaults: dict, ask=input) -> dict:
         print("  port must be a number between 1024 and 65535")
         port = _ask(ask, "Hub port", 8765)
     answers["port"] = number
+    backup_path = _ask(
+        ask, "Backup vault folder, e.g. an external drive (optional, blank to skip)", answers.get("backup_path")
+    )
+    answers["backup_path"] = backup_path
+    if backup_path:
+        daily = _ask(ask, "Daily backup time HH:MM (blank = only by hand)", answers.get("backup_daily_time") or "14:00")
+        while daily and backup_mod.parse_time(daily) is None:
+            print("  time must look like 14:00")
+            daily = _ask(ask, "Daily backup time HH:MM (blank = only by hand)", "14:00")
+        answers["backup_daily_time"] = daily
+    else:
+        answers["backup_daily_time"] = ""
     return answers
 
 
