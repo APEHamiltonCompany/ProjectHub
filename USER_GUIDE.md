@@ -46,7 +46,7 @@ copy tracker\config.example.yaml tracker\config.yaml
 (or `-m tracker.setup_wizard` for text prompts)
 Then check `tracker\config.yaml`:
 - `vault`: the project folder root above.
-- `me.name`: your name as it appears in PM schedules. Rows assigned to you in a kickoff schedule are always tracked.
+- `me.name`: your name as it appears in PM schedules.
 - `holidays`: company holidays. Deadlines are counted in business days and skip these dates.
 - `templates_root`: the template folder (`R:/APE_AE/TEMPLATES`); `project_files` lists what is copied into new projects.
 - `time_estimate_template`: legacy, used only without `project_files`.
@@ -220,7 +220,7 @@ Click a project name, or go to `http://localhost:8765/p/<project number>` (for e
 - **Open as tab group** (with the extension): creates a Chrome tab group named after the project, holding this page and every link. If the group already exists, it focuses that group instead.
 - **Open folder** opens the project folder in Explorer. **Open note in editor** opens the `.md` file in your default editor.
 - **Stage stepper and mini timeline**: where the project is, and its tasks on a small Gantt chart.
-- **Deadlines**: every step grouped by stage (My tasks, Pre-Fabrication, System Test, Closeout, Completion, PM schedule), with its due date, status and a checkbox. Click **⋯ adjust** on a row to override its date or add a blocker note. Use **By phase / By due date** in the panel header to switch to one list sorted by next due date (open tasks first, undated after, done at the bottom, each row tagged with its phase). The hub remembers your choice.
+- **Deadlines**: every step grouped by stage (My tasks, Pre-Kickoff, Pre-Fabrication, System Test, Closeout, Completion), PM milestones in bold with their steps indented under them (2.6a), with its due date, status and a checkbox. Click **⋯ adjust** on a row to override its date or add a blocker note. Use **By phase / By due date** in the panel header to switch to one list sorted by next due date (open tasks first, undated after, done at the bottom, each row tagged with its phase). The hub remembers your choice.
 - **Launch shortcut**: a deadline row can carry a one-click button that opens a local app, file, folder or https link. The default comes from `launch:` on a `workflow:` entry in `tracker/rules.yaml` (for example `launch: 'tool:wire_diagram_builder'` on Review CPR/SO and Wiring diagram, which resolves through `tools.wire_diagram_builder` in `tracker/config.yaml`). Change it for one project under **⋯ adjust** → **Shortcut**: **Set shortcut**, **Use template** or **No shortcut**. The project value is stored as `task_launch:` in the note frontmatter, so you can also edit it in Obsidian. It accepts a `.exe`, any file or folder, or an https link; in Explorer use Shift+right-click → **Copy as path** and paste. The hub waits up to 15 seconds for the launched app's window and brings it to the front.
 - **File templates**: a shortcut can also be `template:<name>`, which copies a template file into the project folder under a name built from the project's SO/QTE number and opens the copy. The template file itself is never written, moved or overwritten, and if the target file is already there the hub just opens it instead of copying again. Define the templates in `tracker/config.yaml`:
   ```yaml
@@ -252,8 +252,8 @@ You can still edit the `.md` in any editor. The tracker only rewrites the sectio
 ### 2.4 Mark steps done or not needed
 - Done: `[x]`. Not needed for this project: `[-]`.
 - Use any checkbox in the hub (dashboard, board cards, project page, note, Monday page) plus its **N/A** button, or type the mark in the note.
-- A box changes only when you click it.
-- The tracker never does this for you, even after you send the related email.
+- A box changes only when you click it, with one exception: PM milestones and their steps tick each other (see 2.6a).
+- The tracker never ticks a box because you sent the related email.
 
 ### 2.4a Logging time
 Ticking a task opens a small popover next to it:
@@ -285,22 +285,45 @@ The **Unclassified emails** section lists emails that mention a project but don'
 
 Which stage each email moves the project to, and what it starts, in business days:
 
-| Email (subject contains) | Stage | Steps due |
+| Email (subject contains) | Stage | Steps due (only when the kickoff timeline has no date for the step's milestone, see 2.6a) |
 |---|---|---|
 | Project Assignment (you on To:) | Pre-Kickoff | Review CPR/SO, ACE questions, time estimate + RMT: +2 |
-| Kickoff | Pre-Fabrication | Wiring diagram: +1 |
-| Internal design review, Internal review | Pre-Fabrication | Test matrix: +1 |
-| Design review | Pre-Fabrication | Finish Apps Plan: +5 |
+| Kickoff | Pre-Fabrication | Kickoff meeting: +0 |
+| Internal design review, Internal review, DR internal | Pre-Fabrication | Wiring diagram, test matrix: +1 |
+| Design review | Pre-Fabrication | Design review: +0; finish Apps Plan: +5 |
 | WO firm / Work order firm | Fabrication | Parts required for testing: +5 |
 | A&T Notification | System Test | - |
-| Closeout / Close out | Closeout | Closeout documents / reply: +5 |
+| Closeout / Close out | Closeout | Reply to PM closeout email: +5 |
 | (none) | Completion | Set by hand or by **Sync to Project Tracker** (2.10a) |
 
-Matching ignores case and spacing. Replies, forwards and automatic replies don't move a project. When a subject matches several rules (for example "INTERNAL REVIEW APE WO FIRM"), the later stage wins. Fabrication has no checklist; it only shows where the project is.
+Matching ignores case and spacing. Replies, forwards and automatic replies don't move a project. When a subject matches several rules (for example "INTERNAL REVIEW APE WO FIRM"), the later stage wins. A project sits in the furthest stage any of its emails reached, so a late design-review email does not pull a System Test project back. Fabrication has no checklist; it only shows where the project is. SO, QTE and project numbers are found even when the subject separates them with underscores (`Design Review_MLI_0207774_SO-296371`).
 
 Change the keywords or stage of each rule in `setup.cmd` → **4. Email rules** (comma-separated keywords). They are saved as `email_rules` in `tracker\config.yaml`, separately for each user; unchanged rules are not saved, so the defaults in `tracker\rules.yaml` apply.
 
-Kickoff emails that include a PM schedule table also add a **PM schedule** section. It lists rows assigned to you plus key milestones: test plan, parts for testing, PreFabApps, need-by, ship, closeout.
+### 2.6a PM milestones from the kickoff schedule
+The newest kickoff email's "Project timeline" table sets the deadlines. Only these rows become milestones, each due on the row's finish date:
+
+| Milestone | Steps under it |
+|---|---|
+| PreFabApps | Start ADP/APC, kickoff meeting, wiring diagram, test matrix, design review |
+| Send Test Plan for Review & List of Parts for Testing | Finish Apps Plan, parts required for testing |
+| Testing | App development, system setup, device testing, troubleshooting |
+| Pre-FAT, Field Apps & iFAT, FAT (larger projects) | iFAT, FAT, post-FAT actions |
+| AE Pack Up (also "Pack Up", "AE Disassembly & Packing") | Pack up |
+| AutoE Close Out | Closeout documents, reply to PM closeout email |
+
+- Every step under a milestone is due on that milestone's **finish** date. The trigger emails in 2.6 still move the project's stage, but they only date a step when its milestone has no date (no readable timeline).
+- Pre-Kickoff steps (assignment +2) and Completion steps have no milestone.
+- In the note and on the project page, steps are indented under their milestone. Ticking a milestone ticks its open steps; ticking or marking N/A the last open step ticks the milestone; reopening a step reopens the milestone.
+- All other timeline rows (design, approvals, prints, BOM, ship date, lead times, HWE close out…) are ignored. There is no separate PM schedule list; old PM schedule lines are removed from notes, and a ticked old PreFabApps or Send Test Plan line ticks the matching milestone.
+- A date you set with **⋯ adjust** (or by editing the 📅 date in the note) still wins over the timeline. Overrides that only repeated the computed date are cleared automatically, so they no longer freeze a date when the PM moves the timeline.
+- If the kickoff timeline was pasted as a picture, nothing can be read: milestones and their steps stay undated until a trigger email dates them. Ask the PM to resend the timeline as a table.
+
+**Project level** comes from the note's `level:`, else the team tracker sheet, else the kickoff email. It filters steps:
+- L1: no wiring diagram, app development, system test steps or methods/support-doc closeout items.
+- Pre-FAT, iFAT and FAT appear when the kickoff timeline has those rows; with no readable timeline, only on L3/L4.
+- Repeat projects (L1R, L2R…): no wiring diagram, test matrix, design review or Apps Plan.
+- Unknown level: every step is shown.
 
 ### 2.7 Settings page
 Open **Settings** in the sidebar, or `http://localhost:8765/settings`. Everything here is saved to `tracker\settings.json`, which overrides `tracker\config.yaml` for both the hub and the scheduled tracker run:
@@ -427,9 +450,9 @@ Ticks made outside the hub (typed directly in the `.md`) show up in the note but
 
 ## Part 4: Customising
 
-- **Workflow steps and offsets**: `tracker\rules.yaml`. `buckets` lists the board stages in order; `triggers` holds the keywords (or `subject_regex`) and stage for each email type, overridden by `email_rules` from the setup window. `workflow` holds each step, its stage and its offset in business days from a trigger. After editing, run `.venv\Scripts\python -m tracker.tracker --dry-run` to check.
+- **Workflow steps and offsets**: `tracker\rules.yaml`. `buckets` lists the board stages in order; `triggers` holds the keywords (or `subject_regex`) and stage for each email type, overridden by `email_rules` from the setup window. `milestones` lists the kickoff-timeline rows that become deadlines (`match` regexes on the row name). `workflow` holds each step, its stage, its `milestone`, its offset in business days from a trigger, and optional `levels` / `repeat: false` filters. After editing, run `.venv\Scripts\python -m tracker.tracker --dry-run` to check.
 - **Note template**: `templates\Project Template.md`, used when **Create project** makes a new note.
-- **PM schedule rows to keep**: `pm_schedule_include` in `tracker\config.yaml`, a regular expression on the row name.
+- **Which timeline rows are milestones**: `milestones` in `tracker\rules.yaml` (a `match` regex per milestone).
 - **How far back emails are read**: `outlook_com.days_back` in `config.yaml`, or `--since N` on the command line.
 - **Holidays**: `holidays` in `config.yaml`. Add next year's dates each December.
 

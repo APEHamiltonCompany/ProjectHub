@@ -63,8 +63,6 @@ auto_create_projects: false
 #   - {id: at_notification, label: A&T notification, stage: System Test, keywords: [A&T Notification]}
 # Days ahead that count as "due soon" in the tracker summary.
 due_soon_days: 3
-# Regex of extra PM schedule rows to track besides the ones assigned to you.
-pm_schedule_include: '(?i)test plan|parts for testing|prefab ?apps|apps|demo|fat|need-by|ship|close ?out'
 # Legacy: used only when project_files (below) is not set. Copied as "TimeEstimates <SO>.xlsx".
 time_estimate_template: ""
 

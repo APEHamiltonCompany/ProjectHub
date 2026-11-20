@@ -7,9 +7,9 @@ from typing import Iterable, Optional
 from . import notes
 from .models import Email, Project
 
-SO_RE = re.compile(r"\bSO[-\s]?(\d{6})\b", re.I)
-QTE_RE = re.compile(r"\bQTE[-\s]?(\d{6})\b", re.I)
-PROJECT_RE = re.compile(r"\b(02\d{5})(?:-\d{3})?\b")
+SO_RE = re.compile(r"(?<![A-Za-z0-9])SO[-\s]?(\d{6})(?![A-Za-z0-9])", re.I)
+QTE_RE = re.compile(r"(?<![A-Za-z0-9])QTE[-\s]?(\d{6})(?![A-Za-z0-9])", re.I)
+PROJECT_RE = re.compile(r"(?<![A-Za-z0-9])(02\d{5})(?:-\d{3})?(?![A-Za-z0-9])")
 LEVEL_RE = re.compile(r"^L\d$", re.I)
 ASSIGNMENT_PREFIX_RE = re.compile(r"^\s*(?:(?:re|fw|fwd)\s*:\s*)*", re.I)
 ILLEGAL_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

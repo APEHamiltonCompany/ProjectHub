@@ -46,8 +46,10 @@ FRONTMATTER_KEYS = [
 
 FILL_ONLY_KEYS = ("sharepoint", "cpr", "rmt", "ship_date", "design_need_by", "team")
 
-STAGE_HEADINGS = ("Pre-Fabrication", "System Test", "Closeout", "Completion")
+STAGE_HEADINGS = ("Pre-Kickoff", "Pre-Fabrication", "System Test", "Closeout", "Completion")
+CHILD_INDENT = "    "
 PM_HEADING = "PM schedule"
+PM_ID_MARK = "-pm-"  # old PM schedule rows; no longer generated, dropped from notes even when ticked
 HEADING_RE = re.compile(
     r"^\*\*(?:" + "|".join(re.escape(name) for name in STAGE_HEADINGS + (PM_HEADING,)) + r")\*\*\s*$"
 )
@@ -193,17 +195,21 @@ def parse_block(body: str) -> tuple[dict, list[str]]:
 
 
 def format_task_line(task: Task, entry: Optional[dict], today: date) -> str:
+    indent = CHILD_INDENT if task.parent else ""
     if entry and entry["mark"] != " ":
-        return entry["line"]
+        return indent + entry["line"].lstrip()
     title = task.title + (" (%s)" % task.note if task.note else "")
-    parts = ["-", "[ ]", title]
+    done = task.done and task.mark in ("x", "-")
+    parts = ["-", "[%s]" % task.mark if done else "[ ]", title]
     token = TIME_RE.search(entry["line"]) if entry else None
     if token:
         parts.append(token.group(0))
     if task.due:
         parts.append(DUE_EMOJI + " " + task.due.isoformat())
+    if done and task.mark == "x":
+        parts.append(DONE_EMOJI + " " + (task.done_date or today).isoformat())
     parts.append(ID_EMOJI + " " + task.id)
-    return " ".join(parts)
+    return indent + " ".join(parts)
 
 
 def render_block(
@@ -219,8 +225,11 @@ def render_block(
         if stage not in ordered:
             ordered.append(stage)
     groups: dict[str, list[Task]] = {}
+    tasks = list(tasks)
+    by_id = {task.id: task for task in tasks}
     for task in tasks:
-        groups.setdefault(task.stage or "", []).append(task)
+        owner = by_id.get(task.parent) if task.parent else None
+        groups.setdefault((owner or task).stage or "", []).append(task)
     seen = set()
     for stage in ordered:
         group = groups.pop(stage, [])
@@ -237,9 +246,9 @@ def render_block(
             seen.add(task.id)
             lines.append(format_task_line(task, entries.get(task.id), today))
     for task_id, entry in entries.items():
-        if task_id in seen or entry["mark"] == " ":
+        if task_id in seen or entry["mark"] == " " or PM_ID_MARK in task_id:
             continue
-        lines.append(entry["line"])
+        lines.append(entry["line"].lstrip())
     lines.extend(user_lines)
     lines.append(BLOCK_END)
     return lines

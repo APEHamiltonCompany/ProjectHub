@@ -164,10 +164,39 @@ class ScheduleTests(unittest.TestCase):
             "Send Test Plan for Review",
         )
         self.assertEqual(extract.strip_project_prefix("Instrument Need-by Date"), "Instrument Need-by Date")
+        self.assertEqual(extract.strip_project_prefix("Amgen - QTE-056793 - Assembly"), "Assembly")
+        self.assertEqual(extract.strip_project_prefix("Sanofi - QTE-056091 AE Pack Up"), "AE Pack Up")
         self.assertEqual(
-            extract.strip_project_prefix("Amgen - QTE-056793 - Assembly"),
-            "Amgen - QTE-056793 - Assembly",
+            extract.strip_project_prefix("Pfizer - SO-285973; SO-285761; SO-285709 AutoE Close Out"),
+            "AutoE Close Out",
         )
+
+    def test_dates_without_weekday(self):
+        body = "\n".join(
+            [
+                "Project Schedule:",
+                "Task Name",
+                "Duration",
+                "Start",
+                "Finish",
+                "Stemcell Technologies - New NIMBUS w/ VSpin Int HW",
+                "51.75 days",
+                "9/25/2026",
+                "12/9/2026",
+                "   Stemcell Technologies - SO-287088 PreFabApps",
+                "0.5 days",
+                "9/28/2026",
+                "9/28/2026",
+                "   Stemcell Technologies - SO-287088 Testing",
+                "1 day",
+                "12/2/2026",
+                "12/3/2026",
+            ]
+        )
+        rows = extract.parse_schedule(body)
+        names = {extract.strip_project_prefix(row["name"]): row["finish"] for row in rows}
+        self.assertEqual(names.get("PreFabApps"), "2026-09-28")
+        self.assertEqual(names.get("Testing"), "2026-12-03")
 
 
 if __name__ == "__main__":

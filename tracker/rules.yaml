@@ -4,48 +4,65 @@ buckets: [Pre-Kickoff, Pre-Fabrication, Fabrication, System Test, Closeout, Comp
 # Email subject keywords (case and spacing ignored) that move a project into a bucket.
 # Override per user with email_rules in config.yaml (setup.cmd -> Email rules).
 # When a subject matches several, the later bucket wins; ties go to the first listed.
+# A project sits in the furthest bucket any of its emails reached.
 triggers:
   - {id: assignment, label: Project assignment, stage: Pre-Kickoff, keywords: ['Project Assignment -'], no_reply: true}
   - {id: kickoff, label: Kickoff, stage: Pre-Fabrication, keywords: [kickoff, kick off]}
-  - {id: internal_design_review, label: Internal design review, stage: Pre-Fabrication, keywords: [internal design review, internal review]}
+  - {id: internal_design_review, label: Internal design review, stage: Pre-Fabrication, keywords: [internal design review, internal review, DR internal, internal DR]}
   - {id: design_review, label: Design review, stage: Pre-Fabrication, keywords: [design review]}
   - {id: work_order_firm, label: Work order firm, stage: Fabrication, keywords: [WO firm, work order firm]}
   - {id: at_notification, label: A&T notification, stage: System Test, keywords: [A&T Notification]}
   - {id: closeout, label: Closeout, stage: Closeout, keywords: [closeout, close out]}
-# Checklist groups on the project page (no Fabrication group: nothing to do while a project waits there).
+# Checklist headings on the project page and in the note (no Fabrication: nothing to do while a project waits there).
 stages:
+  - Pre-Kickoff
   - Pre-Fabrication
   - System Test
   - Closeout
   - Completion
+# PM schedule rows read from the kickoff email (newest chart in the KO thread). Only these become deadlines.
+# match: regexes tried against the row name with the customer/SO prefix removed. A milestone is due on the row's finish date.
+# optional: only added when the chart has the row, or (no chart yet) the project level is in levels.
+milestones:
+  - {id: ms_prefab, stage: Pre-Fabrication, title: "PreFabApps", match: ['^PreFab\s*Apps']}
+  - {id: ms_test_plan, stage: Pre-Fabrication, title: "Send Test Plan for Review & List of Parts for Testing", match: ['^Send Test Plan']}
+  - {id: ms_testing, stage: System Test, title: "Testing", match: ['^Testing$']}
+  - {id: ms_pre_fat, stage: System Test, title: "Pre-FAT", match: ['^Pre-?i?FAT\b'], optional: true, levels: [L3, L4]}
+  - {id: ms_ifat, stage: System Test, title: "Field Apps & iFAT", match: ['^Field Apps', '^iFAT\b'], optional: true, levels: [L3, L4]}
+  - {id: ms_fat, stage: System Test, title: "FAT", match: ['^FAT$'], optional: true, levels: [L3, L4]}
+  - {id: ms_pack_up, stage: System Test, title: "AE Pack Up", match: ['^AE Pack\s*Up', '^Pack\s*Up$', '^AE Disassembly']}
+  - {id: ms_closeout, stage: Closeout, title: "AutoE Close Out", match: ['^AutoE Close\s*Out']}
+# Checklist steps. milestone: the PM row the step sits under (due on that row's finish date).
+# trigger + offset: an email that re-dates the step (business days after it); it wins over the milestone once it arrives.
+# levels: project levels that get the step (all when omitted). repeat: false hides it on repeat projects (L1R, L2R...).
 workflow:
-  - {id: review_cpr_so, stage: Pre-Fabrication, title: "Review CPR/SO in D365", trigger: assignment, offset: 2, launch: 'tool:wire_diagram_builder'}
-  - {id: ace_questions, stage: Pre-Fabrication, title: "Kickoff pre-work questions to ACE", trigger: assignment, offset: 2}
-  - {id: time_estimate, stage: Pre-Fabrication, title: "Time estimate + RMT; reply to assignment email with link", trigger: assignment, offset: 2, launch: 'file:time_estimate'}
-  - {id: adp_start, stage: Pre-Fabrication, title: "Start ADP/APC draft (post to SharePoint)", launch: 'file:project_document'}
-  - {id: kickoff_meeting, stage: Pre-Fabrication, title: "Kickoff: review CPR, time estimates and demo agreement; update Apps Plan", launch: 'file:project_document'}
-  - {id: wiring_diagram, stage: Pre-Fabrication, title: "Wiring diagram (.jpg to ME, .drawio to project page)", trigger: kickoff, offset: 1, launch: 'tool:wire_diagram_builder'}
-  - {id: test_matrix, stage: Pre-Fabrication, title: "Test matrix in design review slides", trigger: internal_design_review, offset: 1, launch: 'file:test_matrix'}
-  - {id: design_review, stage: Pre-Fabrication, title: "Design review: present wiring diagram + test matrix; update RMT", launch: 'file:test_matrix'}
-  - {id: apps_plan, stage: Pre-Fabrication, title: "Finish Apps Plan, send to ACE, post SO parts excel, email PM", trigger: design_review, offset: 5, launch: 'file:project_document'}
-  - {id: parts_for_testing, stage: Pre-Fabrication, title: "Parts Required for Testing list; email PC/PM/ME", trigger: work_order_firm, offset: 5, launch: 'file:parts_request'}
-  - {id: app_dev, stage: System Test, title: "Preliminary applications development (controllers, simulated apps)"}
-  - {id: system_setup, stage: System Test, title: "System setup: unpack, photos, Vendor Device Cable sheet, Multiflex"}
-  - {id: device_testing, stage: System Test, title: "Device handoff and functionality testing"}
-  - {id: app_troubleshooting, stage: System Test, title: "Applications and system troubleshooting (per FAT document)"}
-  - {id: ifat, stage: System Test, title: "Internal FAT (iFAT)"}
-  - {id: fat, stage: System Test, title: "FAT / test demonstration (distribute video)"}
-  - {id: post_fat, stage: System Test, title: "Post-FAT action items; demo for shipment approval"}
-  - {id: pack_up, stage: System Test, title: "Pack up: wire routing docs, closeout photos"}
-  - {id: co_methods, stage: Closeout, title: "Methods posted to project page"}
-  - {id: co_labware, stage: Closeout, title: "Labware posted to project page"}
-  - {id: co_support_docs, stage: Closeout, title: "Integration support documents posted"}
-  - {id: co_parts_list, stage: Closeout, title: "Parts list entry updated and complete"}
-  - {id: co_software, stage: Closeout, title: "Device controller / installers published (when applicable)"}
-  - {id: co_adp_results, stage: Closeout, title: "Apps Plan (ADP) completed with results", launch: 'file:project_document'}
-  - {id: co_uv, stage: Closeout, title: "UV reports posted (when applicable)"}
-  - {id: co_wiki, stage: Closeout, title: "Device wiki pages updated (when applicable)"}
-  - {id: co_fat_templates, stage: Closeout, title: "FAT HW test templates updated (when applicable)"}
-  - {id: closeout_reply, stage: Closeout, title: "Reply to PM closeout email (docs posted)", trigger: closeout, offset: 5}
-  - {id: retrospective, stage: Completion, title: "Retrospective with PM/engineer"}
-  - {id: post_support, stage: Completion, title: "Installation / SAT support"}
+  - {id: review_cpr_so, stage: Pre-Kickoff, title: "Review CPR/SO in D365", trigger: assignment, offset: 2, launch: 'tool:wire_diagram_builder'}
+  - {id: ace_questions, stage: Pre-Kickoff, title: "Kickoff pre-work questions to ACE", trigger: assignment, offset: 2}
+  - {id: time_estimate, stage: Pre-Kickoff, title: "Time estimate + RMT; reply to assignment email with link", trigger: assignment, offset: 2, launch: 'file:time_estimate'}
+  - {id: adp_start, stage: Pre-Fabrication, milestone: ms_prefab, title: "Start ADP/APC draft (post to SharePoint)", launch: 'file:project_document'}
+  - {id: kickoff_meeting, stage: Pre-Fabrication, milestone: ms_prefab, title: "Kickoff: review CPR, time estimates and demo agreement; update Apps Plan", trigger: kickoff, offset: 0, launch: 'file:project_document'}
+  - {id: wiring_diagram, stage: Pre-Fabrication, milestone: ms_prefab, title: "Wiring diagram (.jpg to ME, .drawio to project page)", trigger: internal_design_review, offset: 1, launch: 'tool:wire_diagram_builder', levels: [L2, L3, L4], repeat: false}
+  - {id: test_matrix, stage: Pre-Fabrication, milestone: ms_prefab, title: "Test matrix in design review slides", trigger: internal_design_review, offset: 1, launch: 'file:test_matrix', repeat: false}
+  - {id: design_review, stage: Pre-Fabrication, milestone: ms_prefab, title: "Design review: present wiring diagram + test matrix; update RMT", trigger: design_review, offset: 0, launch: 'file:test_matrix', repeat: false}
+  - {id: apps_plan, stage: Pre-Fabrication, milestone: ms_test_plan, title: "Finish Apps Plan, send to ACE, post SO parts excel, email PM", trigger: design_review, offset: 5, launch: 'file:project_document', repeat: false}
+  - {id: parts_for_testing, stage: Pre-Fabrication, milestone: ms_test_plan, title: "Parts Required for Testing list; email PC/PM/ME", trigger: work_order_firm, offset: 5, launch: 'file:parts_request'}
+  - {id: app_dev, stage: System Test, milestone: ms_testing, title: "Preliminary applications development (controllers, simulated apps)", levels: [L2, L3, L4]}
+  - {id: system_setup, stage: System Test, milestone: ms_testing, title: "System setup: unpack, photos, Vendor Device Cable sheet, Multiflex", levels: [L2, L3, L4]}
+  - {id: device_testing, stage: System Test, milestone: ms_testing, title: "Device handoff and functionality testing", levels: [L2, L3, L4]}
+  - {id: app_troubleshooting, stage: System Test, milestone: ms_testing, title: "Applications and system troubleshooting (per FAT document)", levels: [L2, L3, L4]}
+  - {id: ifat, stage: System Test, milestone: ms_ifat, title: "Internal FAT (iFAT)", levels: [L3, L4]}
+  - {id: fat, stage: System Test, milestone: ms_fat, title: "FAT / test demonstration (distribute video)", levels: [L3, L4]}
+  - {id: post_fat, stage: System Test, milestone: ms_fat, title: "Post-FAT action items; demo for shipment approval", levels: [L3, L4]}
+  - {id: pack_up, stage: System Test, milestone: ms_pack_up, title: "Pack up: wire routing docs, closeout photos"}
+  - {id: co_methods, stage: Closeout, milestone: ms_closeout, title: "Methods posted to project page", levels: [L2, L3, L4]}
+  - {id: co_labware, stage: Closeout, milestone: ms_closeout, title: "Labware posted to project page"}
+  - {id: co_support_docs, stage: Closeout, milestone: ms_closeout, title: "Integration support documents posted", levels: [L2, L3, L4]}
+  - {id: co_parts_list, stage: Closeout, milestone: ms_closeout, title: "Parts list entry updated and complete"}
+  - {id: co_software, stage: Closeout, milestone: ms_closeout, title: "Device controller / installers published (when applicable)", levels: [L2, L3, L4]}
+  - {id: co_adp_results, stage: Closeout, milestone: ms_closeout, title: "Apps Plan (ADP) completed with results", launch: 'file:project_document'}
+  - {id: co_uv, stage: Closeout, milestone: ms_closeout, title: "UV reports posted (when applicable)", levels: [L2, L3, L4]}
+  - {id: co_wiki, stage: Closeout, milestone: ms_closeout, title: "Device wiki pages updated (when applicable)", levels: [L2, L3, L4]}
+  - {id: co_fat_templates, stage: Closeout, milestone: ms_closeout, title: "FAT HW test templates updated (when applicable)", levels: [L2, L3, L4]}
+  - {id: closeout_reply, stage: Closeout, milestone: ms_closeout, title: "Reply to PM closeout email (docs posted)", trigger: closeout, offset: 5}
+  - {id: retrospective, stage: Completion, title: "Retrospective with PM/engineer", levels: [L3, L4]}
+  - {id: post_support, stage: Completion, title: "Installation / SAT support", levels: [L3, L4]}

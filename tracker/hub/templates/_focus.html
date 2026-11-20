@@ -11,7 +11,7 @@
             data-due="{{ item.due or '' }}"{% if item.id %} data-task-id="{{ item.id }}"{% endif %}>
           {{ macros.tick(item) }}
           <div class="task-body">
-            <div class="task-title">{{ item.title }}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}</div>
+            <div class="task-title">{{ item.title }}{% if item.kind == "manual" %}<span class="tag">manual</span>{% endif %}{% if item.parent_title %}<span class="tag milestone-of">{{ item.parent_title }}</span>{% endif %}</div>
             {% if item.notes %}<div class="small muted">{{ item.notes }}</div>{% endif %}
             {% if item.override_note %}<div class="small muted">{{ item.override_note }}</div>{% endif %}
             {% if item.kind == "manual" %}{{ macros.manual_actions(item) }}{{ macros.manual_edit(item) }}{% endif %}

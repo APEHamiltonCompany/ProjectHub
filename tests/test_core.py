@@ -71,6 +71,17 @@ class SubjectTests(unittest.TestCase):
         self.assertEqual(keys["qte"], {"QTE-056793"})
         self.assertEqual(keys["project_no"], {"0207779"})
 
+    def test_keys_between_underscores(self):
+        keys = matcher.extract_keys("Design Review_MLI_0207774_SO-296371_QTE-056793")
+        self.assertEqual(keys["so"], {"SO-296371"})
+        self.assertEqual(keys["qte"], {"QTE-056793"})
+        self.assertEqual(keys["project_no"], {"0207774"})
+
+    def test_keys_not_inside_longer_tokens(self):
+        keys = matcher.extract_keys("ASO-296371 SO-2963712 X0207774 02077745")
+        self.assertEqual(keys["so"], set())
+        self.assertEqual(keys["project_no"], set())
+
 
 class EmlTests(unittest.TestCase):
     def test_sample_eml(self):

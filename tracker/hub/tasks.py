@@ -467,6 +467,86 @@ def set_mark(
     return new_text, _row_at(lines, index)
 
 
+MILESTONE_ID_RE = re.compile(r"-ms_[a-z0-9_]+$")
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _milestone_children(lines: list[str], parent: int) -> list[int]:
+    depth = _indent(lines[parent])
+    out = []
+    for cursor in range(parent + 1, len(lines)):
+        line = lines[cursor]
+        if not line.strip() or NOTES_RE.match(line):
+            continue
+        if _indent(line) <= depth:
+            break
+        if CHECK_RE.match(line):
+            out.append(cursor)
+    return out
+
+
+def _milestone_parent(lines: list[str], index: int) -> int | None:
+    depth = _indent(lines[index])
+    if not depth:
+        return None
+    for cursor in range(index - 1, -1, -1):
+        line = lines[cursor]
+        if not line.strip() or NOTES_RE.match(line):
+            continue
+        if _indent(line) < depth:
+            ident = ID_RE.search(line)
+            if CHECK_RE.match(line) and ident and MILESTONE_ID_RE.search(ident.group(1)):
+                return cursor
+            return None
+    return None
+
+
+def cascade_marks(text: str, index: int) -> tuple[str, list[dict]]:
+    """After line `index` changed: a milestone passes its mark to its steps; a step's milestone is ticked
+    once all its steps are done and unticked when one reopens. Returns the new text and changed ids."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    changed: list[dict] = []
+
+    def put(cursor: int, mark: str) -> None:
+        match = CHECK_RE.match(lines[cursor])
+        if not match or match.group(2).lower() == mark:
+            return
+        lines[cursor] = match.group(1) + mark + match.group(3)
+        ident = ID_RE.search(lines[cursor])
+        changed.append({"id": ident.group(1) if ident else "", "mark": mark})
+
+    def mark_of(cursor: int) -> str:
+        return CHECK_RE.match(lines[cursor]).group(2).lower()
+
+    match = CHECK_RE.match(lines[index]) if 0 <= index < len(lines) else None
+    if not match:
+        return text, changed
+    ident = ID_RE.search(lines[index])
+    mark = match.group(2).lower()
+    kids = _milestone_children(lines, index) if ident and MILESTONE_ID_RE.search(ident.group(1)) else []
+    if kids:
+        if mark == " ":
+            if all(mark_of(kid) != " " for kid in kids):
+                for kid in kids:
+                    if mark_of(kid) == "x":
+                        put(kid, " ")
+        else:
+            for kid in kids:
+                if mark_of(kid) == " ":
+                    put(kid, mark)
+    parent = _milestone_parent(lines, index)
+    if parent is not None:
+        marks = [mark_of(kid) for kid in _milestone_children(lines, parent)]
+        if marks and all(value != " " for value in marks):
+            put(parent, "x" if "x" in marks else "-")
+        elif mark_of(parent) != " ":
+            put(parent, " ")
+    return "\n".join(lines), changed
+
+
 def set_time(
     text: str,
     task_id: str | None = None,

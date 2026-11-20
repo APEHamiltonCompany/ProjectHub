@@ -18,6 +18,7 @@ def load_rules(path: str | Path, cfg: dict | None = None) -> dict:
     data.setdefault("workflow", [])
     data.setdefault("stages", [])
     data.setdefault("buckets", [])
+    data.setdefault("milestones", [])
     custom = email_rules_from_config(cfg or {}, data["triggers"])
     if custom is not None:
         data["triggers"] = custom
@@ -117,6 +118,37 @@ def deliverable_titles(rules: dict) -> dict[str, str]:
 
 def workflow_steps(rules: dict) -> list[dict]:
     return list(rules.get("workflow", []) or [])
+
+
+def milestones(rules: dict) -> list[dict]:
+    return list(rules.get("milestones", []) or [])
+
+
+def milestone_for(rules: dict, row_name: str) -> Optional[dict]:
+    for milestone in milestones(rules):
+        for pattern in milestone.get("match") or []:
+            if re.search(pattern, row_name or "", re.I):
+                return milestone
+    return None
+
+
+def parse_level(value: str) -> tuple[str, bool]:
+    """'L1R' -> ('L1', True); '2' -> ('L2', False); unknown -> ('', False)."""
+    match = re.match(r"^\s*L?\s*(\d)\s*(R)?", str(value or ""), re.I)
+    if not match:
+        return "", False
+    return "L" + match.group(1), bool(match.group(2))
+
+
+def level_allows(item: dict, level: str) -> bool:
+    """Whether a workflow step or milestone applies to a project level; an unknown level gets everything."""
+    base, repeat = parse_level(level)
+    if not base:
+        return True
+    levels = [str(value).upper() for value in item.get("levels") or []]
+    if levels and base not in levels:
+        return False
+    return not (repeat and item.get("repeat") is False)
 
 
 def workflow_stages(rules: dict) -> list[str]:

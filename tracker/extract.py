@@ -30,8 +30,8 @@ TIMELINE_RE = re.compile(r"^\s*Project\s+timeline\s*:?\s*$", re.I)
 DURATION_RE = re.compile(r"^\d+(?:\.\d+)?\s+days?\??$")
 TASK_NAME_RE = re.compile(r"^\s*Task\s+Name\s*$", re.I)
 SUMMARY_ID_RE = re.compile(r"(?:SO|QTE)-?\d{5,6}|Kick", re.I)
-SCHEDULE_DATE_RE = re.compile(r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})/(\d{1,2})/(\d{2,4})$")
-SO_PREFIX_RE = re.compile(r"^.+?\s-\sSO-\d{6}(?:,\s*SO-\d{6})*\s+")
+SCHEDULE_DATE_RE = re.compile(r"^(?:(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+)?(\d{1,2})/(\d{1,2})/(\d{2,4})$")
+SO_PREFIX_RE = re.compile(r"^.+?\s-\s(?:SO|QTE)-\d{6}(?:\s*[,;&/]\s*(?:and\s+)?(?:SO|QTE)-\d{6})*\s+")
 
 
 def clean(text: str) -> str:

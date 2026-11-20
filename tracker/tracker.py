@@ -261,29 +261,14 @@ def slug_for(name: str) -> str:
     return "%s-%s" % (slug or "step", digest)
 
 
-def pm_tasks(project: Project, rows: list[dict], include: str, prefix: str) -> list[Task]:
-    pattern = re.compile(include, re.I) if include else None
-    tasks: list[Task] = []
-    for row in rows:
-        name = row.get("name") or ""
-        if not name:
-            continue
-        if not (row.get("mine") or (pattern and pattern.search(name))):
-            continue
-        finish = row.get("finish")
-        start = row.get("start")
-        tasks.append(
-            Task(
-                id="%s-pm-%s" % (prefix, slug_for(name)),
-                title=extract.strip_project_prefix(name),
-                stage=notes.PM_HEADING,
-                due=date.fromisoformat(finish) if finish else None,
-                trigger_date=date.fromisoformat(start) if start else None,
-                project_no=project.project_no,
-                source="tracker",
-            )
-        )
-    return tasks
+def milestone_rows(rules: dict, schedule: list[dict] | None) -> dict[str, dict]:
+    """KO chart row for each milestone id (first matching row wins)."""
+    found: dict[str, dict] = {}
+    for row in schedule or []:
+        milestone = rules_mod.milestone_for(rules, extract.strip_project_prefix(row.get("name") or ""))
+        if milestone is not None and milestone["id"] not in found:
+            found[milestone["id"]] = row
+    return found
 
 
 def build_tasks(
@@ -293,26 +278,49 @@ def build_tasks(
     holidays: list[date],
     today: date,
     schedule: list[dict] | None = None,
-    pm_include: str = "",
+    level: str = "",
 ) -> tuple[list[Task], str]:
+    """Only the milestone rows of the kickoff timeline are tracked; other PM rows are ignored."""
     prefix = task_prefix(project)
-    tasks: list[Task] = []
-    stage = "Unknown"
-    latest = None
-    for trigger_id, trigger_date in triggers.items():
-        trigger = rules_mod.trigger_by_id(rules, trigger_id)
-        if trigger is None:
-            continue
-        if latest is None or trigger_date > latest:
-            latest = trigger_date
-            stage = trigger.get("stage") or stage
+    stage = furthest_stage(triggers, rules)
+    chart = milestone_rows(rules, schedule)
+    base_level, _repeat = rules_mod.parse_level(level)
+    parents: dict[str, Task] = {}
+    for milestone in rules_mod.milestones(rules):
+        row = chart.get(milestone["id"])
+        if row is None:
+            if milestone.get("optional"):
+                listed = [str(value).upper() for value in milestone.get("levels") or []]
+                if schedule or not base_level or base_level not in listed:
+                    continue
+            elif not rules_mod.level_allows(milestone, level):
+                continue
+        parents[milestone["id"]] = Task(
+            id="%s-%s" % (prefix, milestone["id"]),
+            title=milestone.get("title", milestone["id"]),
+            stage=milestone.get("stage", ""),
+            due=iso_date((row or {}).get("finish")),
+            trigger_date=iso_date((row or {}).get("start")),
+            project_no=project.project_no,
+            source="tracker",
+            milestone=True,
+        )
+    steps: list[Task] = []
     for step in rules_mod.workflow_steps(rules):
+        if not rules_mod.level_allows(step, level):
+            continue
+        parent = parents.get(step.get("milestone") or "")
+        if step.get("milestone") and parent is None:
+            continue
+        # The kickoff timeline's finish date wins; a trigger email only dates a step whose milestone has no date.
         trigger_date = triggers.get(step.get("trigger") or "")
         offset = step.get("offset")
         due = None
-        if trigger_date is not None and offset is not None:
+        if parent is not None and parent.due is not None:
+            due, trigger_date = parent.due, parent.trigger_date
+        elif trigger_date is not None and offset is not None:
             due = rules_mod.add_business_days(trigger_date, int(offset), holidays)
-        tasks.append(
+        steps.append(
             Task(
                 id="%s-%s" % (prefix, step["id"]),
                 title=step.get("title", step["id"]),
@@ -321,13 +329,86 @@ def build_tasks(
                 trigger_date=trigger_date,
                 project_no=project.project_no,
                 source="tracker",
+                parent=parent.id if parent is not None else "",
             )
         )
-    tasks.extend(pm_tasks(project, schedule or [], pm_include, prefix))
-    return tasks, stage
+    return order_tasks(list(parents.values()), steps), stage
 
 
-def merge_block_state(tasks: list[Task], body: str) -> dict:
+def resolve_level(*values: str) -> str:
+    """First readable level from note, tracker sheet, kickoff email: 'L2R', 'L3', or ''."""
+    for value in values:
+        base, repeat = rules_mod.parse_level(value)
+        if base:
+            return base + ("R" if repeat else "")
+    return ""
+
+
+def furthest_stage(triggers: dict[str, date], rules: dict) -> str:
+    """The furthest bucket any trigger email reached."""
+    order = rules_mod.bucket_order(rules)
+    stage, best = "Unknown", -2
+    for trigger_id in triggers:
+        trigger = rules_mod.trigger_by_id(rules, trigger_id)
+        if trigger is None:
+            continue
+        name = str(trigger.get("stage") or "")
+        rank = order.index(name) if name in order else -1
+        if name and rank > best:
+            stage, best = name, rank
+    return stage
+
+
+def order_tasks(parents: list[Task], steps: list[Task]) -> list[Task]:
+    """Milestones in rules order, each followed by its steps; loose steps keep their place."""
+    children: dict[str, list[Task]] = {}
+    for task in steps:
+        if task.parent:
+            children.setdefault(task.parent, []).append(task)
+    pending = list(parents)
+    out: list[Task] = []
+
+    def emit_until(parent_id: str) -> None:
+        while pending:
+            parent = pending.pop(0)
+            out.append(parent)
+            out.extend(children.get(parent.id) or [])
+            if parent.id == parent_id:
+                return
+
+    for task in steps:
+        if task.parent:
+            if any(parent.id == task.parent for parent in pending):
+                emit_until(task.parent)
+            continue
+        out.append(task)
+    emit_until("")
+    return out
+
+
+def cascade_done(tasks: list[Task], today: date) -> None:
+    """A ticked milestone ticks its steps; a milestone whose steps are all done is ticked."""
+    children: dict[str, list[Task]] = {}
+    for task in tasks:
+        if task.parent:
+            children.setdefault(task.parent, []).append(task)
+    for parent in tasks:
+        kids = children.get(parent.id)
+        if not kids:
+            continue
+        if parent.done:
+            for kid in kids:
+                if not kid.done:
+                    kid.done, kid.mark, kid.done_date = True, parent.mark or "x", parent.done_date or today
+        elif all(kid.done for kid in kids):
+            parent.done, parent.done_date = True, today
+            parent.mark = "x" if any(kid.mark == "x" for kid in kids) else "-"
+
+
+PM_LINE_TITLE_RE = re.compile(r"^\s*-\s*\[.\]\s*(.*?)\s*(?:\U0001F4C5|\U0001F194|\u2705|$)")
+
+
+def merge_block_state(tasks: list[Task], body: str, rules: dict | None = None) -> dict:
     entries, _user = notes.parse_block(body)
     for task in tasks:
         entry = entries.get(task.id)
@@ -335,7 +416,24 @@ def merge_block_state(tasks: list[Task], body: str) -> dict:
             task.done = True
             task.done_date = entry["done_date"]
             task.mark = entry["mark"]
+    if rules:
+        carry_pm_marks(tasks, entries, rules)
     return entries
+
+
+def carry_pm_marks(tasks: list[Task], entries: dict, rules: dict) -> None:
+    """A ticked old PM schedule row (e.g. PreFabApps) ticks the milestone that replaces it."""
+    by_id = {task.id: task for task in tasks}
+    for task_id, entry in entries.items():
+        if notes.PM_ID_MARK not in task_id or entry["mark"] == " ":
+            continue
+        match = PM_LINE_TITLE_RE.match(entry["line"])
+        milestone = rules_mod.milestone_for(rules, extract.strip_project_prefix(match.group(1) if match else ""))
+        if milestone is None:
+            continue
+        target = by_id.get("%s-%s" % (task_id.split(notes.PM_ID_MARK, 1)[0], milestone["id"]))
+        if target is not None and not target.done:
+            target.done, target.mark, target.done_date = True, entry["mark"], entry["done_date"]
 
 
 def iso_date(value) -> date | None:
@@ -357,10 +455,23 @@ def apply_due_overrides(
     for task in tasks:
         dues[task.id] = task.due.isoformat() if task.due else None
         override = overrides.get(task.id)
+        if override is not None and not override.get("note") and iso_date(override.get("due")) in (
+            None, task.due, iso_date(computed.get(task.id))
+        ):
+            # A blank override, or one that only repeats the computed date, would freeze the date when the PM chart moves.
+            overrides.pop(task.id)
+            override = None
         if override is None:
             entry = entries.get(task.id)
-            if entry and entry["mark"] == " " and task.id in computed and entry["due"] != iso_date(computed[task.id]):
-                override = {"due": entry["due"].isoformat() if entry["due"] else None, "note": ""}
+            if (
+                entry
+                and entry["mark"] == " "
+                and entry["due"] is not None
+                and task.id in computed
+                and entry["due"] != iso_date(computed[task.id])
+                and entry["due"] != task.due
+            ):
+                override = {"due": entry["due"].isoformat(), "note": ""}
                 overrides[task.id] = override
         if override:
             task.due = iso_date(override.get("due"))
@@ -410,6 +521,7 @@ def project_info(matched: dict) -> dict[str, dict]:
             entry["rmt"] = parsed["rmt"]
             entry["ship_date"] = parsed["ship_date"] or ""
             entry["design_need_by"] = parsed["design_need_by"] or ""
+            entry["level"] = parsed["level"] or ""
         links: list[dict] = []
         seen: set[str] = set()
         for title, url in (
@@ -522,13 +634,15 @@ def build_snapshot(
                 "status": task.status,
                 "mark": task.mark,
                 "source": task.source,
+                "parent": task.parent,
+                "milestone": task.milestone,
             }
             for task in project.tasks
         ]
         emails = []
         items = sorted(matched.get(project.key) or [], key=lambda item: item[0].date, reverse=True)
         for email, trigger_id, reply in items[:50]:
-            entry = {
+            row = {
                 "date": email.date.astimezone().isoformat(timespec="seconds"),
                 "sender": email.sender,
                 "subject": email.subject,
@@ -538,9 +652,9 @@ def build_snapshot(
                 "open": open_info(email),
             }
             if email.message_id.startswith("calendar:"):
-                entry["minutes"] = calendar_minutes(email)
-                entry["start"] = email.date.astimezone().isoformat(timespec="seconds")
-            emails.append(entry)
+                row["minutes"] = calendar_minutes(email)
+                row["start"] = email.date.astimezone().isoformat(timespec="seconds")
+            emails.append(row)
         rows.append(
             {
                 "key": project.key,
@@ -719,6 +833,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
     )
     info = project_info(matched)
     sheet = None
+    sheet_matches: dict[str, dict] = {}
     try:
         sheet = ape_sheet.load(cfg)
     except Exception as exc:
@@ -742,7 +857,6 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         out("tracker sheet: %s" % (sheet.get("error") or "unavailable"))
     stages = rules_mod.workflow_stages(rules)
     me_name = str((cfg.get("me") or {}).get("name") or "")
-    pm_include = str(cfg.get("pm_schedule_include") or "")
     due_overrides = dict(stored_state.get("due_overrides") or {})
     computed_due: dict[str, str | None] = {}
 
@@ -758,8 +872,15 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
             continue
         kickoff = latest_kickoff(matched.get(project.key) or [])
         schedule = extract.parse_schedule(kickoff.body_text, me_name) if kickoff is not None else []
+        note_level = project.level
+        project.level = resolve_level(
+            project.level,
+            str((sheet_matches.get(project.key) or {}).get("level") or ""),
+            str((info.get(project.key) or {}).get("level") or ""),
+        )
         tasks, stage = build_tasks(
-            project, project_triggers, rules, holidays, today, schedule=schedule, pm_include=pm_include
+            project, project_triggers, rules, holidays, today, schedule=schedule,
+            level=project.level,
         )
         if project.stage_manual:
             stage = project.stage_manual
@@ -769,7 +890,8 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         if project.note_path and notes.lp(project.note_path).is_file():
             text, _nl, _bom, _enc = notes.read_text(project.note_path)
             _data, _raw, body = notes.split_frontmatter(text)
-        entries = merge_block_state(tasks, body)
+        entries = merge_block_state(tasks, body, rules)
+        cascade_done(tasks, today)
         computed_due.update(apply_due_overrides(tasks, entries, due_overrides, stored_state.get("computed_due") or {}))
         project.tasks = tasks
         if not project.note_path or (args.dry_run and not notes.lp(project.note_path).is_file()):
@@ -782,7 +904,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
             "so": project.so,
             "qte": project.qte,
             "customer": project.customer,
-            "level": project.level,
+            "level": note_level,
             "stage": stage,
             "assigned": project_triggers.get("assignment", date.min).isoformat()
             if "assignment" in project_triggers

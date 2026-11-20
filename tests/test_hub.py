@@ -306,6 +306,19 @@ class HubAppTests(unittest.TestCase):
         response = self.client.get("/", headers=HOST)
         self.assertEqual(response.status_code, 200)
 
+    def test_project_page_keeps_steps_under_their_milestone(self):
+        snap = self.snapshot()
+        snap["projects"][0]["tasks"] = [
+            {"id": "p0207000-ms_testing", "title": "MS Testing", "stage": "System Test", "due": "2026-12-20", "milestone": True},
+            {"id": "p0207000-app_dev", "title": "Step app dev", "stage": "System Test", "due": "2026-11-15", "parent": "p0207000-ms_testing"},
+            {"id": "p0207000-ms_pack_up", "title": "MS Pack up", "stage": "System Test", "due": "2026-12-01", "milestone": True},
+            {"id": "p0207000-pack_up", "title": "Step pack up", "stage": "System Test", "due": "2026-12-01", "parent": "p0207000-ms_pack_up"},
+        ]
+        self.snapshot_path.write_text(json.dumps(snap), encoding="utf-8")
+        html = self.client.get("/p/0207000", headers=HOST).get_data(as_text=True)
+        positions = [html.index(title) for title in ("MS Testing", "Step app dev", "MS Pack up", "Step pack up")]
+        self.assertEqual(positions, sorted(positions))
+
     def test_pages_render(self):
         for url in ("/", "/monday", "/p/0207000"):
             response = self.client.get(url, headers=HOST)

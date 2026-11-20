@@ -32,6 +32,8 @@ class Task:
     source: str = "tracker"
     mark: str = " "
     note: str = ""
+    parent: str = ""
+    milestone: bool = False
 
     @property
     def status(self) -> str:

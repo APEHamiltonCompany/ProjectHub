@@ -114,7 +114,6 @@ def form_from_config(cfg: dict) -> dict:
         "refresh_minutes": str(hub.get("refresh_minutes") if hub.get("refresh_minutes") is not None else 15),
         "toast": bool(hub.get("toast", True)),
         "holidays": "\n".join(str(item) for item in cfg.get("holidays") or []),
-        "pm_schedule_include": str(cfg.get("pm_schedule_include") or ""),
         "install_dashboard_note": bool(cfg.get("install_dashboard_note", False)),
         "backup_path": str(vault_backup.get("path") or ""),
         "backup_daily_time": str(vault_backup.get("daily_time") or ""),
@@ -286,12 +285,7 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
             errors.append("Holiday is not a YYYY-MM-DD date: %s" % item)
     cfg["holidays"] = sorted(set(holidays))
 
-    pattern = form["pm_schedule_include"].strip()
-    try:
-        re.compile(pattern)
-    except re.error as exc:
-        errors.append("PM schedule pattern is not a valid regex: %s" % exc)
-    cfg["pm_schedule_include"] = pattern
+    cfg.pop("pm_schedule_include", None)
     cfg["install_dashboard_note"] = bool(form["install_dashboard_note"])
 
     if "backup_path" in form:
@@ -589,7 +583,6 @@ def run_ui() -> None:
     row = entry(advanced, row, "refresh_minutes", "Hub refresh (minutes)", "How often the hub re-reads email. 0 = never.")
     row = check(advanced, row, "toast", "Windows notification for new assignments")
     row = check(advanced, row, "install_dashboard_note", "Copy Dashboard.md into the vault (Obsidian users)")
-    row = entry(advanced, row, "pm_schedule_include", "PM schedule pattern", "Regex of extra PM schedule rows to track.")
     ttk.Label(advanced, text="Holidays").grid(row=row, column=0, sticky="nw", padx=(0, 8))
     holidays = tk.Text(advanced, height=6, width=20)
     holidays.insert("1.0", form["holidays"])

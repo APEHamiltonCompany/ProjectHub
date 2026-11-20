@@ -73,11 +73,11 @@ class SetupGuiTests(unittest.TestCase):
     def test_validation_errors(self):
         form = self.form(
             vault=str(self.dir / "missing"), days_back="abc", hub_port="80",
-            holidays="2026-13-01", pm_schedule_include="(", time_estimate_template=str(self.dir / "x.xlsx"),
+            holidays="2026-13-01", time_estimate_template=str(self.dir / "x.xlsx"),
             personal_tasks_path=str(self.dir / "tasks.txt"), wire_diagram_builder=str(self.dir / "no.exe"),
         )
         _cfg, errors, _warnings = setup_gui.build_config(form, self.example)
-        self.assertEqual(len(errors), 8, errors)
+        self.assertEqual(len(errors), 7, errors)
 
     def test_missing_email_folder_is_warning(self):
         form = self.form(eml_folders=[str(self.dir / "nope")])

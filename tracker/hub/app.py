@@ -1007,9 +1007,26 @@ def create_app(
             rows.append({"index": index, "kind": "text", "html": Markup(_inline(line))})
         return rows
 
-    def group_by_stage(rows: list[dict], order: list[str] | None = None) -> list[dict]:
+    def checklist_order(rows: list[dict]) -> list[dict]:
+        """Workflow rows in the tracker's checklist order (each milestone followed by its own steps); other rows stay by due date after them."""
+        workflow = sorted((row for row in rows if "seq" in row), key=lambda row: row["seq"])
+        ids = {row["id"] for row in workflow}
+        children: dict[str, list[dict]] = {}
+        roots = []
+        for row in workflow:
+            if row.get("parent") in ids:
+                children.setdefault(row["parent"], []).append(row)
+            else:
+                roots.append(row)
+        ordered = []
+        for row in roots:
+            ordered.append(row)
+            ordered.extend(children.get(row["id"], []))
+        return ordered + [row for row in rows if "seq" not in row]
+
+    def group_by_stage(rows: list[dict], order: list[str] | None = None, tree: bool = False) -> list[dict]:
         buckets: dict[str, list[dict]] = {}
-        for row in rows:
+        for row in checklist_order(rows) if tree else rows:
             buckets.setdefault(row["stage"], []).append(row)
         ordered = []
         for stage in order if order is not None else stage_order:
@@ -1231,7 +1248,8 @@ def create_app(
             for row in parsed:
                 if row["id"]:
                     by_id.setdefault(row["id"], row)
-            for task in [] if archived else project.get("tasks") or []:
+            titles = {task.get("id"): task.get("title") or "" for task in project.get("tasks") or []}
+            for seq, task in enumerate([] if archived else project.get("tasks") or []):
                 task_id = task.get("id") or ""
                 entry = by_id.get(task_id)
                 stage = task.get("stage") or ""
@@ -1247,6 +1265,10 @@ def create_app(
                             "kind": "pm" if stage == notes.PM_HEADING else "workflow",
                             "id": task_id,
                             "title": task.get("title") or "",
+                            "parent": task.get("parent") or "",
+                            "parent_title": titles.get(task.get("parent") or "", ""),
+                            "milestone": bool(task.get("milestone")),
+                            "seq": seq,
                             "notes": entry["notes"] if entry else "",
                             "stage": stage,
                             "category": "project",
@@ -1735,7 +1757,7 @@ def create_app(
         return render_template(
             "project.html",
             project=project,
-            groups=group_by_stage(tasks, ["My tasks"] + stage_order),
+            groups=group_by_stage(tasks, ["My tasks"] + stage_order, tree=True),
             links=project_links(project, state),
             note=view,
             files=files,
@@ -2760,7 +2782,8 @@ def create_app(
                     return jsonify({"error": "not a checkbox line"}), 400
                 new_line = match.group(1) + mark + match.group(3)
                 lines[line_index] = new_line
-                notes.write_text(path, "\n".join(lines), newline, bom, encoding)
+                new_text, cascaded = tasks_mod.cascade_marks("\n".join(lines), line_index)
+                notes.write_text(path, new_text, newline, bom, encoding)
                 raw = notes.lp(path).read_bytes()
                 state = state_mod.load(state_path)
                 ident = ID_RE.search(new_line)
@@ -2774,7 +2797,7 @@ def create_app(
                     }
                 )
                 state_mod.save(state_path, state)
-        return jsonify({"line": new_line, "hash": hashlib.sha256(raw).hexdigest(), "mark": mark})
+        return jsonify({"line": new_line, "hash": hashlib.sha256(raw).hexdigest(), "mark": mark, "cascaded": cascaded})
 
     @app.post("/api/note/save")
     def api_note_save():
@@ -3083,6 +3106,7 @@ def create_app(
                     )
                 except (KeyError, ValueError):
                     return jsonify({"error": "conflict"}), 409
+                new_text, cascaded = tasks_mod.cascade_marks(new_text, row["index"])
                 if task_id.startswith(tasks_mod.MANUAL_PREFIX):
                     new_text, spawn_row = tasks_mod.spawn_next(new_text, task_id, date.today())
                     if spawn_row is not None:
@@ -3102,7 +3126,7 @@ def create_app(
                     }
                 )
                 state_mod.save(state_path, state)
-        return jsonify({"ok": True, "mark": mark, "line": row["line"], "spawned": spawned})
+        return jsonify({"ok": True, "mark": mark, "line": row["line"], "spawned": spawned, "cascaded": cascaded})
 
     @app.post("/api/task/time")
     def api_task_time():

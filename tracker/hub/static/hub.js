@@ -204,6 +204,10 @@
       if (data.line) { wrapper.setAttribute("data-line", data.line); }
       syncTask(id || wrapper.getAttribute("data-task-id") || "", data.mark, wrapper);
       var reload = null;
+      (data.cascaded || []).forEach(function (item) { syncTask(item.id, item.mark, null); });
+      if (action === "toggle" && data.cascaded && data.cascaded.length) {
+        reload = function () { window.location.reload(); };
+      }
       if (data.spawned) {
         toast("Next occurrence added for " + (data.spawned.due || ""));
         reload = function () { window.location.reload(); };
