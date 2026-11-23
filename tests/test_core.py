@@ -446,7 +446,7 @@ class CreateProjectTests(unittest.TestCase):
             note_path = folder / "Exact SO-296266 0207840.md"
             self.assertTrue(note_path.is_file())
             text = note_path.read_text(encoding="utf-8")
-            for heading in ("Pre-Fabrication", "System Test", "Closeout", "Completion"):
+            for heading in ("Pre-Fabrication", "System Test", "Closeout"):
                 self.assertIn("**%s**" % heading, text)
             self.assertEqual(text.count("- [ ] Review the pipettor configuration"), 1)
             self.assertEqual(text.count("- [ ] Confirm all custom parts"), 1)

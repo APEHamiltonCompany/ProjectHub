@@ -82,7 +82,7 @@
               data-due="{{ task.due or '' }}" data-task-id="{{ task.id }}">
             {{ macros.tick(task) }}
             <div class="task-body">
-              <div class="task-title">{{ task.title }}{% if task.kind == "manual" %}<span class="tag">manual</span>{% endif %}<span class="tag stage-tag">{{ group.stage }}</span>{% if task.parent_title %}<span class="tag stage-tag">{{ task.parent_title }}</span>{% endif %}</div>
+              <div class="task-title">{{ task.title }}{% if task.kind == "manual" %}<span class="tag">manual</span>{% endif %}{% if task.needs_date %}<span class="tag">Needs date</span>{% endif %}<span class="tag stage-tag">{{ group.stage }}</span>{% if task.parent_title %}<span class="tag stage-tag">{{ task.parent_title }}</span>{% endif %}</div>
               {% if task.notes %}<div class="small muted">{{ task.notes }}</div>{% endif %}
               {% if task.override_note %}<div class="small muted">{{ task.override_note }}</div>{% endif %}
               {% if task.kind == "manual" %}{{ macros.manual_actions(task) }}{{ macros.manual_edit(task) }}{% endif %}

@@ -22,6 +22,7 @@
         <div class="card-row">
           {% if card.overdue %}<span class="pill pill-overdue">{{ card.overdue }} overdue</span>{% endif %}
           {% if card.due_soon %}<span class="pill pill-due-soon">{{ card.due_soon }} due soon</span>{% endif %}
+          {% if card.undated %}<span class="pill pill-due-soon">{{ card.undated }} need date</span>{% endif %}
           {% if card.sheet.health in ("RISK", "ISSUE") %}<span class="pill pill-overdue">sheet: RISK</span>{% endif %}
           {% if card.sheet_mismatch %}<span class="pill pill-sheet" title="Tracker sheet SO Status: {{ card.sheet.so_status }}">sheet: {{ card.sheet.so_status }}</span>{% endif %}
         </div>

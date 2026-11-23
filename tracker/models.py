@@ -34,6 +34,7 @@ class Task:
     note: str = ""
     parent: str = ""
     milestone: bool = False
+    mandatory: bool = False
 
     @property
     def status(self) -> str:

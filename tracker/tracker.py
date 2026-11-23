@@ -286,6 +286,7 @@ def build_tasks(
     chart = milestone_rows(rules, schedule)
     base_level, _repeat = rules_mod.parse_level(level)
     parents: dict[str, Task] = {}
+    emitted: list[Task] = []
     for milestone in rules_mod.milestones(rules):
         row = chart.get(milestone["id"])
         if row is None:
@@ -295,7 +296,7 @@ def build_tasks(
                     continue
             elif not rules_mod.level_allows(milestone, level):
                 continue
-        parents[milestone["id"]] = Task(
+        parent = Task(
             id="%s-%s" % (prefix, milestone["id"]),
             title=milestone.get("title", milestone["id"]),
             stage=milestone.get("stage", ""),
@@ -305,6 +306,10 @@ def build_tasks(
             source="tracker",
             milestone=True,
         )
+        parents[milestone["id"]] = parent
+        if milestone.get("enabled", True) is not False:
+            emitted.append(parent)
+    emitted_ids = {task.id for task in emitted}
     steps: list[Task] = []
     for step in rules_mod.workflow_steps(rules):
         if not rules_mod.level_allows(step, level):
@@ -329,10 +334,11 @@ def build_tasks(
                 trigger_date=trigger_date,
                 project_no=project.project_no,
                 source="tracker",
-                parent=parent.id if parent is not None else "",
+                parent=parent.id if parent is not None and parent.id in emitted_ids else "",
+                mandatory=bool(step.get("mandatory")),
             )
         )
-    return order_tasks(list(parents.values()), steps), stage
+    return order_tasks(emitted, steps), stage
 
 
 def resolve_level(*values: str) -> str:
@@ -636,6 +642,7 @@ def build_snapshot(
                 "source": task.source,
                 "parent": task.parent,
                 "milestone": task.milestone,
+                "mandatory": task.mandatory,
             }
             for task in project.tasks
         ]
@@ -807,6 +814,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
     if not rules_path.is_file():
         rules_path = HERE / "rules.yaml"
     rules = rules_mod.load_rules(rules_path, cfg)
+    rules = rules_mod.apply_checklist(rules, cfg)
     holidays = rules_mod.parse_holidays(cfg.get("holidays") or [])
     today = date.today()
     due_soon_days = int(cfg.get("due_soon_days") or 3)

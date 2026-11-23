@@ -42,6 +42,23 @@
   </div>
 </section>
 
+<section class="panel">
+  <div class="panel-head"><h2>Project checklist</h2>
+    <div class="row">
+      <button type="button" class="btn small" id="checklist-required-only">Required only</button>
+      <button type="button" class="btn small" id="checklist-enable-all">Enable all</button>
+    </div>
+  </div>
+  <p class="small muted">Required items are always added to every project (mark one N/A per project if it doesn't apply). Optional items are added only when ticked here. Only listed items count toward a project's status.</p>
+  <div class="checklist">
+    {% set ns = namespace(stage="") %}
+    {% for item in checklist %}
+    {% if item.stage != ns.stage %}{% set ns.stage = item.stage %}<div class="checklist-stage">{{ item.stage }}</div>{% endif %}
+    <label class="checklist-row{% if item.milestone %} checklist-child{% endif %}"><input type="checkbox" class="checklist-item" data-id="{{ item.id }}"{% if item.enabled %} checked{% endif %}{% if item.mandatory %} disabled{% endif %}><span>{{ item.title }}</span>{% if item.mandatory %}<span class="tag">Required</span>{% endif %}{% if item.kind == "milestone" %}<span class="tag">milestone</span>{% endif %}</label>
+    {% endfor %}
+  </div>
+</section>
+
 {% set offline_now = backup.offline.active %}
 <section class="panel" id="backup">
   <div class="panel-head"><h2>Backup vault</h2>{% if backup.enabled %}<span class="small muted">daily at {{ backup.daily_time or "off" }}{% if backup.next_run %} &middot; next {{ backup.next_run }}{% endif %}</span>{% endif %}</div>

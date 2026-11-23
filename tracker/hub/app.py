@@ -1212,6 +1212,8 @@ def create_app(
                     "ref": row.get("ref") or "",
                 }
             )
+            row.setdefault("mandatory", False)
+            row["needs_date"] = bool(row.get("mandatory")) and mark == " " and due is None
             return row
 
         def launch_fields(key: str, task_id: str, overrides: dict) -> dict:
@@ -1268,6 +1270,7 @@ def create_app(
                             "parent": task.get("parent") or "",
                             "parent_title": titles.get(task.get("parent") or "", ""),
                             "milestone": bool(task.get("milestone")),
+                            "mandatory": bool(task.get("mandatory")),
                             "seq": seq,
                             "notes": entry["notes"] if entry else "",
                             "stage": stage,
@@ -1526,6 +1529,7 @@ def create_app(
                     "progress_pct": int(round(100 * len(done) / len(counted))) if counted else 0,
                     "overdue": sum(1 for item in rows if item["status"] == "overdue"),
                     "due_soon": sum(1 for item in rows if item["status"] == "due-soon"),
+                    "undated": sum(1 for item in rows if item.get("needs_date")),
                     "next_due": {
                         "title": dated[0]["title"],
                         "due": dated[0]["due"],
@@ -1599,6 +1603,7 @@ def create_app(
             mine = [item for item in items if item["key"] == key]
             overdue = sum(1 for item in mine if item["status"] == "overdue")
             soon = sum(1 for item in mine if item["status"] == "due-soon")
+            undated = any(item.get("needs_date") for item in mine)
             rows.append(
                 {
                     "key": key,
@@ -1606,7 +1611,7 @@ def create_app(
                     "customer": project.get("customer") or "",
                     "ident": project_ident(project),
                     "label": project_label(project),
-                    "health": "bad" if overdue else "warn" if soon else "good",
+                    "health": "bad" if overdue else "warn" if soon or undated else "good",
                 }
             )
         rows.sort(key=lambda row: (row["customer"].lower() or "\uffff", row["ident"].lower()))
@@ -3692,6 +3697,13 @@ def create_app(
 
         return jsonify({"ok": True, "ui": mutate_state(apply)})
 
+    def checklist_rows() -> list[dict]:
+        enabled = rules_mod.enabled_optional(cfg)
+        return [
+            dict(item, enabled=True if item["mandatory"] else item["id"] in enabled)
+            for item in rules_mod.checklist_items(rules)
+        ]
+
     def effective_settings() -> dict:
         return {
             "vault": str(live["vault"]).replace("\\", "/"),
@@ -3703,6 +3715,11 @@ def create_app(
             "theme": live["theme"],
             "auto_reload_pages": live["auto_reload_pages"],
             "ui": ui_prefs(),
+            "checklist_optional": [
+                item_id
+                for item_id in rules_mod.checklist_optional_ids(rules)
+                if item_id in rules_mod.enabled_optional(cfg)
+            ],
         }
 
     @app.get("/settings")
@@ -3714,6 +3731,7 @@ def create_app(
             settings=effective_settings(),
             layouts=LAYOUTS,
             backup=backup_view(),
+            checklist=checklist_rows(),
         )
 
     @app.post("/api/settings")
@@ -3745,6 +3763,20 @@ def create_app(
             if not isinstance(value, bool):
                 return jsonify({"error": "auto_reload_pages must be true or false"}), 400
             overlay["auto_reload_pages"] = value
+        if "checklist_optional" in payload:
+            value = payload.get("checklist_optional")
+            if not isinstance(value, list):
+                return jsonify({"error": "checklist_optional must be a list"}), 400
+            known = rules_mod.checklist_optional_ids(rules)
+            picked: list[str] = []
+            for item_id in value:
+                if not isinstance(item_id, str):
+                    return jsonify({"error": "checklist_optional must be a list"}), 400
+                if item_id not in known:
+                    return jsonify({"error": "unknown checklist item: %s" % item_id}), 400
+                if item_id not in picked:
+                    picked.append(item_id)
+            overlay["checklist_optional"] = picked
         if (cfg.get("offline") or {}).get("active"):
             for key in ("vault", "personal_tasks_path", "time_estimate_template", "ape_sheet_path"):
                 payload.pop(key, None)
@@ -3800,6 +3832,7 @@ def create_app(
             overlay["backup"] = saved
         settings_mod.save_overlay(settings_path, overlay)
         before_vault = live["vault"]
+        before_checklist = rules_mod.enabled_optional(cfg)
         new_cfg = _load_config(config_path)
         cfg.clear()
         cfg.update(new_cfg)
@@ -3812,7 +3845,7 @@ def create_app(
 
             mutate_state(apply)
         rerun = False
-        if live["vault"] != before_vault:
+        if live["vault"] != before_vault or rules_mod.enabled_optional(cfg) != before_checklist:
             start_run()
             rerun = True
         return jsonify({"ok": True, "settings": effective_settings(), "rerun": rerun})

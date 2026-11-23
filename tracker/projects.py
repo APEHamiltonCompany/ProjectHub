@@ -197,6 +197,7 @@ def create_from_pending(
 
     rules_path = Path(cfg.get("rules_path") or (HERE / "rules.yaml"))
     rules = rules_mod.load_rules(rules_path, cfg)
+    rules = rules_mod.apply_checklist(rules, cfg)
     holidays = rules_mod.parse_holidays(cfg.get("holidays") or [])
     from .tracker import build_tasks
 
@@ -408,6 +409,7 @@ def link_pending(cfg: dict, pending: dict, folder_path: str | Path) -> dict:
 
     rules_path = Path(cfg.get("rules_path") or (HERE / "rules.yaml"))
     rules = rules_mod.load_rules(rules_path, cfg)
+    rules = rules_mod.apply_checklist(rules, cfg)
     holidays = rules_mod.parse_holidays(cfg.get("holidays") or [])
     from .tracker import build_tasks
 

@@ -94,6 +94,9 @@ def apply_overlay(cfg: dict, overlay: dict) -> dict:
         value = overlay.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = value.strip()
+    checklist = overlay.get("checklist_optional")
+    if isinstance(checklist, list):
+        merged["checklist_optional"] = list(dict.fromkeys(str(value) for value in checklist))
     for key in HUB_KEYS:
         if key not in overlay:
             continue

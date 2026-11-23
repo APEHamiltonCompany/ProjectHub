@@ -124,6 +124,81 @@ def milestones(rules: dict) -> list[dict]:
     return list(rules.get("milestones", []) or [])
 
 
+def checklist_optional_ids(rules: dict) -> list[str]:
+    """Ids of the milestones and the non-mandatory steps, in rules order."""
+    out = [str(item["id"]) for item in milestones(rules) if item.get("id")]
+    out.extend(str(step["id"]) for step in workflow_steps(rules) if step.get("id") and not step.get("mandatory"))
+    return out
+
+
+def checklist_items(rules: dict) -> list[dict]:
+    """Rows for Settings > Project checklist, in rules order."""
+    steps = [step for step in workflow_steps(rules) if step.get("id")]
+    marks = [milestone for milestone in milestones(rules) if milestone.get("id")]
+
+    def step_row(step: dict) -> dict:
+        return {
+            "id": str(step["id"]),
+            "title": step.get("title", step["id"]),
+            "stage": step.get("stage", ""),
+            "kind": "step",
+            "mandatory": bool(step.get("mandatory")),
+            "milestone": str(step.get("milestone") or ""),
+        }
+
+    stages = workflow_stages(rules)
+    for milestone in marks:
+        if milestone.get("stage", "") not in stages:
+            stages.append(milestone.get("stage", ""))
+    rows = []
+    for stage in stages:
+        rows.extend(step_row(step) for step in steps if step.get("stage", "") == stage and not step.get("milestone"))
+        for milestone in marks:
+            if milestone.get("stage", "") != stage:
+                continue
+            rows.append(
+                {
+                    "id": str(milestone["id"]),
+                    "title": milestone.get("title", milestone["id"]),
+                    "stage": stage,
+                    "kind": "milestone",
+                    "mandatory": False,
+                    "milestone": "",
+                }
+            )
+            rows.extend(step_row(step) for step in steps if step.get("milestone") == milestone["id"])
+    listed = {row["id"] for row in rows}
+    rows.extend(step_row(step) for step in steps if str(step["id"]) not in listed)
+    return rows
+
+
+def enabled_optional(cfg: dict | None) -> set[str]:
+    values = (cfg or {}).get("checklist_optional")
+    if not isinstance(values, list):
+        return set()
+    return {str(value) for value in values if isinstance(value, str)}
+
+
+def apply_checklist(rules: dict, cfg: dict | None) -> dict:
+    """Rules with only the mandatory and the user's optional steps; each milestone carries an enabled flag."""
+    enabled = enabled_optional(cfg)
+    out = dict(rules)
+    workflow = []
+    for step in workflow_steps(rules):
+        if step.get("mandatory"):
+            item = dict(step)
+            item.pop("levels", None)
+            item.pop("repeat", None)
+            workflow.append(item)
+        elif str(step.get("id") or "") in enabled:
+            workflow.append(dict(step))
+    out["workflow"] = workflow
+    out["milestones"] = [
+        dict(milestone, enabled=str(milestone.get("id") or "") in enabled) for milestone in milestones(rules)
+    ]
+    return out
+
+
 def milestone_for(rules: dict, row_name: str) -> Optional[dict]:
     for milestone in milestones(rules):
         for pattern in milestone.get("match") or []:

@@ -2492,11 +2492,26 @@
       if (backupTime) {
         payload.backup = { daily_time: backupTime.value, offline_fallback: !!(offlineAuto && offlineAuto.checked), work_offline: !!(workOffline && workOffline.checked) };
       }
+      var checklistItems = document.querySelectorAll(".checklist-item");
+      if (checklistItems.length) {
+        payload.checklist_optional = Array.prototype.filter.call(checklistItems, function (input) {
+          return input.checked && !input.disabled;
+        }).map(function (input) { return input.getAttribute("data-id"); });
+      }
       post("/api/settings", payload).then(function (data) {
-        toast("Settings saved" + (data.rerun ? " - refreshing projects from the new folder" : ""));
+        toast("Settings saved" + (data.rerun ? " - refreshing projects" : ""));
         window.setTimeout(function () { window.location.reload(); }, 900);
       }).catch(fail);
     });
+    function setOptional(checked) {
+      Array.prototype.forEach.call(document.querySelectorAll(".checklist-item"), function (input) {
+        if (!input.disabled) { input.checked = checked; }
+      });
+    }
+    var requiredOnly = document.getElementById("checklist-required-only");
+    var enableAll = document.getElementById("checklist-enable-all");
+    if (requiredOnly) { requiredOnly.addEventListener("click", function () { setOptional(false); }); }
+    if (enableAll) { enableAll.addEventListener("click", function () { setOptional(true); }); }
   }
 
   initGantt();

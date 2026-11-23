@@ -143,7 +143,7 @@ class LinkPendingTests(unittest.TestCase):
         data, _raw, body = notes.split_frontmatter(text)
         self.assertEqual(data["customer"], "Acme")
         self.assertEqual(data["project_no"], "0207999")
-        self.assertIn("Review CPR/SO", body)
+        self.assertIn("Time Estimate (in Project Page)", body)
         self.assertEqual(sorted(p.name for p in folder.iterdir()), [note.name])
 
     def test_rejects_folder_outside_vault(self):
