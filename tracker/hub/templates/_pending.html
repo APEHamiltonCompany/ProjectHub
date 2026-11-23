@@ -6,6 +6,7 @@
     <span class="badge">New assignment</span>
     {% if entry.test %}<span class="badge level">TEST</span>{% endif %}
     {% if entry.source == "sheet" %}<span class="badge level">FROM TRACKER SHEET</span>{% endif %}
+    {% if entry.source == "schedule" %}<span class="badge level">From schedule</span>{% endif %}
     <h3>{{ entry.subject }}</h3>
   </div>
   <div class="small muted">

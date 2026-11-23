@@ -21,6 +21,7 @@ from tracker import state as state_mod
 from tracker.models import Email, Project, Task
 from tracker.sources import collect_all
 from tracker.sources import ape_sheet
+from tracker.sources import ms_project
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -271,6 +272,21 @@ def milestone_rows(rules: dict, schedule: list[dict] | None) -> dict[str, dict]:
     return found
 
 
+def pick_schedule(
+    rules: dict, mpp_rows: list[dict], email_rows: list[dict], authoritative: bool = True
+) -> tuple[list[dict], str]:
+    """Rows to date the checklist from, and where they came from: the schedule unless it has no milestone rows."""
+    mpp_rows = list(mpp_rows or [])
+    email_rows = list(email_rows or [])
+    if authoritative:
+        if milestone_rows(rules, mpp_rows):
+            return mpp_rows, "schedule"
+        return (email_rows, "email") if email_rows else ([], "")
+    if milestone_rows(rules, email_rows):
+        return email_rows, "email"
+    return (mpp_rows, "schedule") if mpp_rows else ([], "")
+
+
 def build_tasks(
     project: Project,
     triggers: dict[str, date],
@@ -279,6 +295,7 @@ def build_tasks(
     today: date,
     schedule: list[dict] | None = None,
     level: str = "",
+    chart_source: str = "",
 ) -> tuple[list[Task], str]:
     """Only the milestone rows of the kickoff timeline are tracked; other PM rows are ignored."""
     prefix = task_prefix(project)
@@ -305,6 +322,7 @@ def build_tasks(
             project_no=project.project_no,
             source="tracker",
             milestone=True,
+            due_source=(chart_source or "chart") if iso_date((row or {}).get("finish")) else "",
         )
         parents[milestone["id"]] = parent
         if milestone.get("enabled", True) is not False:
@@ -321,10 +339,13 @@ def build_tasks(
         trigger_date = triggers.get(step.get("trigger") or "")
         offset = step.get("offset")
         due = None
+        due_source = ""
         if parent is not None and parent.due is not None:
             due, trigger_date = parent.due, parent.trigger_date
+            due_source = parent.due_source
         elif trigger_date is not None and offset is not None:
             due = rules_mod.add_business_days(trigger_date, int(offset), holidays)
+            due_source = "%s+%s" % (step.get("trigger") or "", offset)
         steps.append(
             Task(
                 id="%s-%s" % (prefix, step["id"]),
@@ -336,6 +357,7 @@ def build_tasks(
                 source="tracker",
                 parent=parent.id if parent is not None and parent.id in emitted_ids else "",
                 mandatory=bool(step.get("mandatory")),
+                due_source=due_source,
             )
         )
     return order_tasks(emitted, steps), stage
@@ -440,6 +462,60 @@ def carry_pm_marks(tasks: list[Task], entries: dict, rules: dict) -> None:
         target = by_id.get("%s-%s" % (task_id.split(notes.PM_ID_MARK, 1)[0], milestone["id"]))
         if target is not None and not target.done:
             target.done, target.mark, target.done_date = True, entry["mark"], entry["done_date"]
+
+
+def apply_schedule_done(
+    tasks: list[Task], chart_rows: dict[str, dict], rules: dict, ticked: dict, today: date
+) -> dict:
+    """Tick the checklist items whose schedule row is 100% complete; never untick and never re-tick."""
+    complete = {
+        milestone_id: row
+        for milestone_id, row in (chart_rows or {}).items()
+        if ms_project._pct(row.get("pct")) == 100
+    }
+    if not complete:
+        return ticked
+    stages = rules_mod.workflow_stages(rules)
+    milestone_stage = {
+        str(milestone.get("id") or ""): str(milestone.get("stage") or "")
+        for milestone in rules_mod.milestones(rules)
+    }
+    steps = {str(step.get("id") or ""): step for step in rules_mod.workflow_steps(rules)}
+
+    def stage_rank(name: str) -> int:
+        return stages.index(name) if name in stages else -1
+
+    def loose_row(step: dict) -> dict | None:
+        rank = stage_rank(str(step.get("stage") or ""))
+        qualified = [
+            row for milestone_id, row in complete.items() if stage_rank(milestone_stage.get(milestone_id, "")) >= rank
+        ]
+        if not qualified:
+            return None
+        return min(qualified, key=lambda row: iso_date(row.get("finish")) or today)
+
+    for task in tasks:
+        if task.done or task.mark != " " or task.id in ticked:
+            continue
+        if task.id.startswith("m-") or notes.PM_ID_MARK in task.id:
+            continue
+        suffix = task.id.rsplit("-", 1)[-1]
+        row = None
+        if task.milestone:
+            row = complete.get(suffix)
+        else:
+            step = steps.get(suffix)
+            if step is None:
+                continue
+            milestone_id = str(step.get("milestone") or "")
+            row = complete.get(milestone_id) if milestone_id else loose_row(step)
+        if row is None:
+            continue
+        task.done = True
+        task.mark = "x"
+        task.done_date = iso_date(row.get("finish")) or today
+        ticked[task.id] = task.done_date.isoformat()
+    return ticked
 
 
 def iso_date(value) -> date | None:
@@ -612,6 +688,9 @@ def build_snapshot(
     generated: str,
     sheet: dict | None = None,
     hints: dict | None = None,
+    schedule: dict | None = None,
+    schedule_mine: int = 0,
+    schedule_matched: int = 0,
 ) -> dict:
     sheet_rows = {}
     if sheet and sheet.get("ok"):
@@ -643,6 +722,7 @@ def build_snapshot(
                 "parent": task.parent,
                 "milestone": task.milestone,
                 "mandatory": task.mandatory,
+                "due_source": task.due_source,
             }
             for task in project.tasks
         ]
@@ -683,6 +763,10 @@ def build_snapshot(
                 "ship_source": ship_source,
                 "sheet": sheet_row,
                 "sheet_mismatch": sheet_mismatch,
+                "schedule_source": project.schedule_source,
+                "schedule_mine": project.schedule_mine,
+                "schedule_project": project.schedule_project,
+                "schedule_unlinked": project.schedule_unlinked,
                 "design_need_by": entry.get("design_need_by", ""),
                 "sharepoint": entry.get("sharepoint", ""),
                 "cpr": entry.get("cpr", ""),
@@ -717,6 +801,17 @@ def build_snapshot(
             "stale_hours": int((sheet or {}).get("stale_hours") or 48),
             "row_count": len((sheet or {}).get("rows") or []),
             "matched": len(sheet_rows),
+        },
+        "ms_project": {
+            "ok": bool((schedule or {}).get("ok")),
+            "error": str((schedule or {}).get("error") or ""),
+            "stale": bool((schedule or {}).get("stale")),
+            "source": str((schedule or {}).get("source") or ""),
+            "file_mtime": str((schedule or {}).get("file_mtime") or ""),
+            "reader": str((schedule or {}).get("reader") or ""),
+            "projects": len((schedule or {}).get("projects") or []),
+            "mine": int(schedule_mine),
+            "matched": int(schedule_matched),
         },
         "ape_sheet_index": ape_sheet_index(sheet) if (sheet or {}).get("ok") else {},
     }
@@ -863,9 +958,45 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
             )
     else:
         out("tracker sheet: %s" % (sheet.get("error") or "unavailable"))
+    schedule_data = None
+    schedule_matches: dict[str, dict] = {}
+    schedule_mine = 0
+    schedule_links = dict(stored_state.get("schedule_links") or {})
+    try:
+        schedule_data = ms_project.load(cfg)
+    except Exception as exc:
+        schedule_data = {"ok": False, "error": str(exc) or exc.__class__.__name__, "projects": []}
+    if schedule_data.get("ok"):
+        schedule_matches = ms_project.match(schedule_data, projects, cfg, links=schedule_links)
+        schedule_mine = sum(
+            1
+            for item in schedule_data.get("projects") or ()
+            if any(ms_project.is_me(person, cfg) for person in item.get("people") or ())
+        )
+        line = "schedule: %d projects, %d mine, %d matched" % (
+            len(schedule_data.get("projects") or []),
+            schedule_mine,
+            len(schedule_matches),
+        )
+        if schedule_data.get("stale"):
+            line += " (stale: %s)" % (schedule_data.get("error") or "cached copy")
+        out(line)
+        if not args.dry_run:
+            pending.update(
+                ms_project.schedule_pending(
+                    schedule_data,
+                    cfg,
+                    projects,
+                    pending,
+                    datetime.now().astimezone().isoformat(timespec="seconds"),
+                )
+            )
+    else:
+        out("schedule: %s" % (schedule_data.get("error") or "unavailable"))
     stages = rules_mod.workflow_stages(rules)
     me_name = str((cfg.get("me") or {}).get("name") or "")
     due_overrides = dict(stored_state.get("due_overrides") or {})
+    schedule_ticked = dict(stored_state.get("schedule_ticked") or {})
     computed_due: dict[str, str | None] = {}
 
     note_changes: list[str] = []
@@ -876,10 +1007,26 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
                 project_triggers["assignment"] = date.fromisoformat(project.assigned[:10])
             except ValueError:
                 pass
-        if not project_triggers:
+        sp = schedule_matches.get(project.key)
+        project.schedule_unlinked = schedule_links.get(project.key) == "off"
+        project.schedule_project = str((sp or {}).get("name") or "")
+        if sp and "assignment" not in project_triggers and not project.assigned and sp.get("created"):
+            try:
+                project_triggers["assignment"] = date.fromisoformat(sp["created"][:10])
+            except ValueError:
+                pass
+        if not project_triggers and not sp:
             continue
         kickoff = latest_kickoff(matched.get(project.key) or [])
-        schedule = extract.parse_schedule(kickoff.body_text, me_name) if kickoff is not None else []
+        email_rows = extract.parse_schedule(kickoff.body_text, me_name) if kickoff is not None else []
+        mpp_rows = ms_project.schedule_rows(sp) if sp else []
+        schedule, schedule_source = pick_schedule(
+            rules, mpp_rows, email_rows, bool((cfg.get("ms_project") or {}).get("authoritative", True))
+        )
+        project.schedule_source = schedule_source
+        project.schedule_mine = (
+            any(ms_project.is_me(person, cfg) for person in sp.get("people") or ()) if sp else None
+        )
         note_level = project.level
         project.level = resolve_level(
             project.level,
@@ -888,7 +1035,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         )
         tasks, stage = build_tasks(
             project, project_triggers, rules, holidays, today, schedule=schedule,
-            level=project.level,
+            level=project.level, chart_source=schedule_source,
         )
         if project.stage_manual:
             stage = project.stage_manual
@@ -899,6 +1046,8 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
             text, _nl, _bom, _enc = notes.read_text(project.note_path)
             _data, _raw, body = notes.split_frontmatter(text)
         entries = merge_block_state(tasks, body, rules)
+        if schedule_source == "schedule":
+            apply_schedule_done(tasks, milestone_rows(rules, schedule), rules, schedule_ticked, today)
         cascade_done(tasks, today)
         computed_due.update(apply_due_overrides(tasks, entries, due_overrides, stored_state.get("computed_due") or {}))
         project.tasks = tasks
@@ -993,6 +1142,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
                 "email_overrides": stored_state.get("email_overrides") or {},
                 "due_overrides": due_overrides,
                 "computed_due": computed_due,
+                "schedule_ticked": schedule_ticked,
                 "last_run": generated,
             }
         )
@@ -1003,7 +1153,8 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         snapshot_path = Path(cfg.get("snapshot_path") or (ROOT / "output" / "snapshot.json"))
         snapshot = build_snapshot(
             today, projects, triggers, matched, info, pending, unmatched, generated, sheet=sheet,
-            hints=so_hints(emails, projects),
+            hints=so_hints(emails, projects), schedule=schedule_data, schedule_mine=schedule_mine,
+            schedule_matched=len(schedule_matches),
         )
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")

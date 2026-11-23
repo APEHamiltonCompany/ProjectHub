@@ -35,6 +35,7 @@ class Task:
     parent: str = ""
     milestone: bool = False
     mandatory: bool = False
+    due_source: str = ""
 
     @property
     def status(self) -> str:
@@ -61,6 +62,10 @@ class Project:
     assigned: str = ""
     tasks: list[Task] = field(default_factory=list)
     triggers: dict[str, date] = field(default_factory=dict)
+    schedule_source: str = ""
+    schedule_mine: bool | None = None
+    schedule_project: str = ""
+    schedule_unlinked: bool = False
 
     @property
     def key(self) -> str:

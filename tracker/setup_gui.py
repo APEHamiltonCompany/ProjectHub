@@ -107,6 +107,7 @@ def form_from_config(cfg: dict) -> dict:
         "ape_auto_find": bool(ape.get("auto_find", True)),
         "ape_path": str(ape.get("path") or ""),
         "ape_url": str(ape.get("url") or ""),
+        "ms_project_path": str((cfg.get("ms_project") or {}).get("path") or ""),
         "exclude_folders": _csv(cfg.get("exclude_folders")),
         "auto_create_projects": bool(cfg.get("auto_create_projects", True)),
         "due_soon_days": str(cfg.get("due_soon_days") if cfg.get("due_soon_days") is not None else 3),
@@ -260,6 +261,10 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
         if ape["path"] and not Path(ape["path"]).exists():
             warnings.append("APE sheet folder does not exist: %s" % ape["path"])
     cfg["ape_sheet"] = ape
+
+    schedule = dict(cfg.get("ms_project") or {})
+    schedule["path"] = _path(form["ms_project_path"])
+    cfg["ms_project"] = schedule
 
     cfg["exclude_folders"] = _split(form["exclude_folders"])
     cfg["auto_create_projects"] = bool(form["auto_create_projects"])
@@ -535,6 +540,10 @@ def run_ui() -> None:
         "Where downloaded copies (APE Project Tracking*.xlsx) are looked for, e.g. Downloads.", "dir",
     )
     entry(ape, row, "ape_url", "Sheet URL", "SharePoint link shown in the hub.")
+    entry(
+        ape, row + 2, "ms_project_path", "Project schedule",
+        "Optional. A .mpp or Project 'Save as XML' file; its dates win over the kickoff email chart.",
+    )
 
     vault_backup = section("6. Backup vault (offline copy of your projects)")
     row = entry(

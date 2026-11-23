@@ -127,7 +127,11 @@
   <div class="field-row">
     <label class="field"><span>Tracker sheet (file or folder)</span><input type="text" id="set-ape-sheet" value="{{ settings.ape_sheet_path }}"{% if offline_now %} disabled{% endif %}></label>
   </div>
+  <div class="field-row">
+    <label class="field"><span>Project schedule (.mpp or .xml)</span><input type="text" id="set-ms-project" value="{{ settings.ms_project_path }}"{% if offline_now %} disabled{% endif %}></label>
+  </div>
   <p class="small muted">Leave a path empty to fall back to the value in the config file.</p>
+  <p class="small muted">A .mpp schedule needs Java 11+ and the mpxj package (setup installs them); a Project 'Save as XML' copy needs neither.</p>
 </section>
 
 <section class="panel">

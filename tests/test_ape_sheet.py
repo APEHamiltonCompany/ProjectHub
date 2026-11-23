@@ -171,6 +171,14 @@ DROPDOWN_ROWS = [
     ["STARlet23 (New)", "02 - Design", "-", "None", "AS", "Adriana Shurtz", "AZ", "AJ Zunino", "Alex Hantz"],
     ["STAR (New)", "03 - Design Review", "AA", "Aman Aman", "BL", "Brian LaMarre", "ST", "Scott Thompson"],
 ]
+ROLE_DROPDOWN_ROWS = [
+    ["Platform", "", "Project Status", "", "Project Manager", "", "", "Mechanical Egr", "", "", "Automation Egr"],
+    ["STAR (New)", "", "02 - Design", "", "", "", "", "CH", "Chris Holtz", "", "AZ", "AJ Zunino"],
+    ["STAR (New)", "", "03 - Design Review", "", "CH", "Cindy Heinrich", "", "", "", "", "", ""],
+]
+ROLE_ACTIVE_ROW = list(ACTIVE_ROW_MINE)
+ROLE_ACTIVE_ROW[7] = "CH"
+ROLE_ACTIVE_ROW[8] = "CH"
 
 
 def build_workbook(path: Path) -> Path:
@@ -264,6 +272,30 @@ class ApeSheetTests(unittest.TestCase):
         self.assertEqual(placeholder["keys"]["so"], ["SO-555555"])
         self.assertEqual(data["names"]["AZ"], "AJ Zunino")
         self.assertEqual(data["names"]["ST"], "Scott Thompson")
+
+    def test_role_names_resolve_duplicate_initials(self):
+        path = self.root / "roles.xlsx"
+        wb = Workbook()
+        active = wb.active
+        active.title = "Active Projects"
+        active.append(ACTIVE_HEADERS)
+        active.append(ROLE_ACTIVE_ROW)
+        dropdowns = wb.create_sheet("Dropdowns")
+        for row in ROLE_DROPDOWN_ROWS:
+            dropdowns.append(row)
+        wb.save(path)
+        rows, names = ape_sheet._read(path)
+        self.assertEqual(names["CH"], "Chris Holtz")
+        mine = [row for row in rows if row["tab"] == "Active"][0]
+        self.assertEqual(mine["pm_name"], "Cindy Heinrich")
+        self.assertEqual(mine["me_name"], "Chris Holtz")
+        self.assertEqual(mine["ae_name"], "AJ Zunino")
+
+    def test_resolve_names_prefers_role_map(self):
+        self.assertEqual(
+            ape_sheet._resolve_names("CH/AZ", {"CH": "Chris Holtz", "AZ": "AJ Zunino"}, {"CH": "Cindy Heinrich"}),
+            "Cindy Heinrich, AJ Zunino",
+        )
 
     def test_source_untouched(self):
         before_hash = digest(self.source)

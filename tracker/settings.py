@@ -5,7 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
-TOP_KEYS = ("vault", "personal_tasks_path", "time_estimate_template", "ape_sheet_path")
+TOP_KEYS = ("vault", "personal_tasks_path", "time_estimate_template", "ape_sheet_path", "ms_project_path")
 HUB_KEYS = ("refresh_minutes", "due_soon_days", "theme", "auto_reload_pages")
 THEMES = ("system", "light", "dark")
 BACKUP_KEYS = ("work_offline", "offline_fallback", "daily_time")

@@ -268,4 +268,4 @@ def extract_links(body: str) -> list[dict]:
 
 def strip_project_prefix(name: str) -> str:
     stripped = SO_PREFIX_RE.sub("", name or "").strip()
-    return stripped.lstrip(" -").strip() or (name or "").strip()
+    return re.sub(r"\s+", " ", stripped.lstrip(" -").strip()) or (name or "").strip()

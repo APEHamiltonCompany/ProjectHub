@@ -736,6 +736,7 @@
     if (action === "backup-apply") { return backupApply(target); }
     if (action === "backup-dismiss") { return post("/api/backup/dismiss", {}).then(function () { window.location.reload(); }).catch(fail); }
     if (action === "so-dismiss") { return dismissSo(target); }
+    if (action === "schedule-link") { return setScheduleLink(target); }
     if (action === "launch-set") { return setLaunch(target); }
     if (action === "launch-reset") { return resetLaunch(target); }
     if (action === "launch-none") { return clearLaunch(target); }
@@ -1380,6 +1381,18 @@
     post("/api/projects/so/dismiss", { key: button.getAttribute("data-key"), so: button.getAttribute("data-so") }).then(function () {
       var row = button.closest(".so-hint");
       if (row) { row.parentNode.removeChild(row); }
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function setScheduleLink(button) {
+    var linked = button.getAttribute("data-linked") === "1";
+    busy(button, true);
+    post("/api/projects/schedule_link", { key: button.getAttribute("data-key"), linked: linked }).then(function () {
+      toast(linked ? "Using schedule again - refreshing\u2026" : "Unlinked from schedule - refreshing\u2026");
+      window.setTimeout(function () { window.location.reload(); }, 3000);
     }).catch(function (error) {
       busy(button, false);
       fail(error);
@@ -2470,6 +2483,7 @@
       var personal = document.getElementById("set-personal");
       var template = document.getElementById("set-template");
       var apeSheet = document.getElementById("set-ape-sheet");
+      var msProject = document.getElementById("set-ms-project");
       var backupTime = document.getElementById("set-backup-time");
       var offlineAuto = document.getElementById("set-offline-auto");
       var workOffline = document.getElementById("set-work-offline");
@@ -2484,9 +2498,10 @@
         vault: vault ? vault.value : "",
         personal_tasks_path: personal ? personal.value : "",
         time_estimate_template: template ? template.value : "",
-        ape_sheet_path: apeSheet ? apeSheet.value : ""
+        ape_sheet_path: apeSheet ? apeSheet.value : "",
+        ms_project_path: msProject ? msProject.value : ""
       };
-      [["vault", vault], ["personal_tasks_path", personal], ["time_estimate_template", template], ["ape_sheet_path", apeSheet]].forEach(function (pair) {
+      [["vault", vault], ["personal_tasks_path", personal], ["time_estimate_template", template], ["ape_sheet_path", apeSheet], ["ms_project_path", msProject]].forEach(function (pair) {
         if (pair[1] && pair[1].disabled) { delete payload[pair[0]]; }
       });
       if (backupTime) {

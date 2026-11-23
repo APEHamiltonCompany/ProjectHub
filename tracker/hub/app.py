@@ -1183,6 +1183,17 @@ def create_app(
         overrides = state.get("due_overrides") or {}
         items: list[dict] = []
 
+        def due_label(source: str) -> str:
+            if source == "schedule":
+                return "schedule"
+            if source == "email":
+                return "kickoff chart"
+            if "+" in source:
+                trigger_id, _sep, offset = source.partition("+")
+                trigger = rules_mod.trigger_by_id(rules, trigger_id) or {}
+                return "from %s +%s" % (trigger.get("label") or trigger_id, offset)
+            return "computed"
+
         def finish(row: dict) -> dict:
             due = row.get("due")
             mark = row.get("mark") or " "
@@ -1213,6 +1224,8 @@ def create_app(
                 }
             )
             row.setdefault("mandatory", False)
+            row.setdefault("due_source", "")
+            row["due_label"] = due_label(row["due_source"]) if row.get("computed_due") else ""
             row["needs_date"] = bool(row.get("mandatory")) and mark == " " and due is None
             return row
 
@@ -1281,6 +1294,7 @@ def create_app(
                             "start": _iso(task.get("start")),
                             "due": entry["due"] if entry else _iso(task.get("due")),
                             "computed_due": _iso(task.get("due")),
+                            "due_source": task.get("due_source") or "",
                             "line_index": entry["index"] if entry else None,
                             "line": entry["line"] if entry else "",
                             "mark": entry["mark"] if entry else str(task.get("mark") or " ").lower(),
@@ -1522,6 +1536,7 @@ def create_app(
                     "ship_source": project.get("ship_source") or "",
                     "sheet": project.get("sheet") or {},
                     "sheet_mismatch": bool(project.get("sheet_mismatch")),
+                    "schedule_mine": project.get("schedule_mine"),
                     "design_need_by": project.get("design_need_by") or "",
                     "team": list(project.get("team") or []),
                     "total": len(counted),
@@ -1632,6 +1647,13 @@ def create_app(
                 return "forbidden", 403
         return None
 
+    def schedule_view() -> dict:
+        data = dict(snapshot().get("ms_project") or {})
+        source = str(data.get("source") or "")
+        data["name"] = Path(source).name if source else ""
+        data["mtime_label"] = _when(str(data.get("file_mtime") or ""))
+        return data
+
     @app.context_processor
     def inject_globals():
         return {
@@ -1649,6 +1671,7 @@ def create_app(
             "zooms": ZOOMS,
             "nav_projects": nav_projects(),
             "ape_sheet": snapshot().get("ape_sheet") or {},
+            "ms_project": schedule_view(),
             "backup_line": backup_line(),
         }
 
@@ -1783,6 +1806,7 @@ def create_app(
             so_hints=project_so_hints(project),
             so_can_rename=bool(so_rename_target(project, ["SO-000000"])),
             folder_name=Path(project.get("folder") or "").name,
+            schedule_name=Path(str((snapshot().get("ms_project") or {}).get("source") or "")).stem or "schedule",
         )
 
     @app.get("/t/<task_id>")
@@ -2429,6 +2453,26 @@ def create_app(
         result = mutate_state(apply)
         start_run()
         return jsonify({"task_id": task_id, "override": result})
+
+    @app.post("/api/projects/schedule_link")
+    def api_projects_schedule_link():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        linked = bool(payload.get("linked"))
+        project = project_by_key(key)
+        if project is None:
+            return jsonify({"error": "unknown project"}), 404
+
+        def apply(state: dict) -> None:
+            links = state.setdefault("schedule_links", {})
+            if linked:
+                links.pop(key, None)
+            else:
+                links[key] = "off"
+
+        mutate_state(apply)
+        start_run()
+        return jsonify({"key": key, "linked": linked})
 
     @app.post("/api/links/add")
     def api_links_add():
@@ -3704,12 +3748,16 @@ def create_app(
             for item in rules_mod.checklist_items(rules)
         ]
 
+    def schedule_path() -> str:
+        return str(cfg.get("ms_project_path") or (cfg.get("ms_project") or {}).get("path") or "")
+
     def effective_settings() -> dict:
         return {
             "vault": str(live["vault"]).replace("\\", "/"),
             "personal_tasks_path": str(live["personal_path"]).replace("\\", "/"),
             "time_estimate_template": str(cfg.get("time_estimate_template") or "").replace("\\", "/"),
             "ape_sheet_path": str(cfg.get("ape_sheet_path") or "").replace("\\", "/"),
+            "ms_project_path": schedule_path().replace("\\", "/"),
             "refresh_minutes": live["refresh_minutes"],
             "due_soon_days": live["due_soon_days"],
             "theme": live["theme"],
@@ -3778,7 +3826,7 @@ def create_app(
                     picked.append(item_id)
             overlay["checklist_optional"] = picked
         if (cfg.get("offline") or {}).get("active"):
-            for key in ("vault", "personal_tasks_path", "time_estimate_template", "ape_sheet_path"):
+            for key in ("vault", "personal_tasks_path", "time_estimate_template", "ape_sheet_path", "ms_project_path"):
                 payload.pop(key, None)
         if "vault" in payload:
             value = _clean_path(payload.get("vault"))
@@ -3814,6 +3862,14 @@ def create_app(
                 overlay["ape_sheet_path"] = value
             else:
                 return jsonify({"error": "ape_sheet_path must be an existing .xlsx file or folder"}), 400
+        if "ms_project_path" in payload:
+            value = _clean_path(payload.get("ms_project_path"))
+            if not value:
+                overlay.pop("ms_project_path", None)
+            elif notes.lp(value).is_file() and value.lower().endswith((".mpp", ".mpt", ".xml")):
+                overlay["ms_project_path"] = value
+            else:
+                return jsonify({"error": "ms_project_path must be an existing .mpp or .xml file"}), 400
         if "backup" in payload:
             value = payload.get("backup")
             if not isinstance(value, dict):
@@ -3833,6 +3889,7 @@ def create_app(
         settings_mod.save_overlay(settings_path, overlay)
         before_vault = live["vault"]
         before_checklist = rules_mod.enabled_optional(cfg)
+        before_schedule = schedule_path()
         new_cfg = _load_config(config_path)
         cfg.clear()
         cfg.update(new_cfg)
@@ -3845,7 +3902,11 @@ def create_app(
 
             mutate_state(apply)
         rerun = False
-        if live["vault"] != before_vault or rules_mod.enabled_optional(cfg) != before_checklist:
+        if (
+            live["vault"] != before_vault
+            or rules_mod.enabled_optional(cfg) != before_checklist
+            or schedule_path() != before_schedule
+        ):
             start_run()
             rerun = True
         return jsonify({"ok": True, "settings": effective_settings(), "rerun": rerun})

@@ -10,6 +10,8 @@ EMPTY = {
     "email_overrides": {},
     "due_overrides": {},
     "computed_due": {},
+    "schedule_ticked": {},
+    "schedule_links": {},
     "last_run": "",
     "tick_log": [],
     "user_links": {},
@@ -33,6 +35,8 @@ def load(path: str | Path) -> dict:
     data.setdefault("email_overrides", {})
     data.setdefault("due_overrides", {})
     data.setdefault("computed_due", {})
+    data.setdefault("schedule_ticked", {})
+    data.setdefault("schedule_links", {})
     data.setdefault("last_run", "")
     data.setdefault("tick_log", [])
     data.setdefault("user_links", {})

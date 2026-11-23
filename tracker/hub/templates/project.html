@@ -42,6 +42,13 @@
         {% if so_can_rename %}<label class="small so-rename-label" title="The QTE stays in the name so both are easy to find"><input type="checkbox" id="so-rename" checked> rename folder to "SO-&hellip; ({{ folder_name }})"</label>{% endif %}
       </div></div>
     </div>
+    {% if project.schedule_unlinked %}
+    <p class="small muted">Not using {{ schedule_name }} for this project{% if project.schedule_source == "email" %}; dates from kickoff email chart{% endif %}. <button type="button" class="btn small" data-action="schedule-link" data-key="{{ project.key }}" data-linked="1">Use schedule again</button></p>
+    {% elif project.schedule_project %}
+    <p class="small muted">{% if project.schedule_source == "schedule" %}Dates from{% else %}Linked to{% endif %} {{ schedule_name }}: <strong>{{ project.schedule_project }}</strong>{% if project.schedule_mine is sameas false %} <span class="pill pill-sheet">Not assigned to you in schedule</span>{% endif %} <button type="button" class="btn small ghost" data-action="schedule-link" data-key="{{ project.key }}" data-linked="0" title="Stop using this schedule project's dates and assignment for this folder">Unlink</button>{% if project.schedule_source == "email" %} &middot; dates from kickoff email chart{% endif %}</p>
+    {% elif project.schedule_source == "email" %}
+    <p class="small muted">Dates from kickoff email chart</p>
+    {% endif %}
     {% for hint in so_hints %}
     <div class="so-hint">
       <span>Email <q>{{ hint.subject }}</q> ({{ hint.date }}) mentions <strong>{{ hint.so }}</strong>.</span>
@@ -89,7 +96,7 @@
             </div>
             <div class="task-launch">{% if task.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="{{ project.key }}" data-task-id="{{ task.id }}" title="{{ task.launch_title or task.launch }}">{% if task.launch_kind == "template" %}&#128196;{% else %}&#9654;{% endif %} {{ task.launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
             <div class="task-meta">
-              <span class="nowrap">{{ task.due or "" }}{% if task.override_due %}<span class="small muted"> (override)</span>{% elif task.computed_due %}<span class="small muted"> (computed)</span>{% endif %}</span>
+              <span class="nowrap">{{ task.due or "" }}{% if task.override_due %}<span class="small muted"> (override)</span>{% elif task.due_label %}<span class="small muted"> ({{ task.due_label }})</span>{% endif %}</span>
               {{ macros.status_pill(task.status) }}
             </div>
             {% if task.mark == " " and task.id %}

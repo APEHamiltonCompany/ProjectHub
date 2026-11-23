@@ -25,6 +25,7 @@
           {% if card.undated %}<span class="pill pill-due-soon">{{ card.undated }} need date</span>{% endif %}
           {% if card.sheet.health in ("RISK", "ISSUE") %}<span class="pill pill-overdue">sheet: RISK</span>{% endif %}
           {% if card.sheet_mismatch %}<span class="pill pill-sheet" title="Tracker sheet SO Status: {{ card.sheet.so_status }}">sheet: {{ card.sheet.so_status }}</span>{% endif %}
+          {% if card.schedule_mine is sameas false %}<span class="pill pill-sheet">Not assigned to you in schedule</span>{% endif %}
         </div>
         {% if card.next_due %}
         <div class="card-next">

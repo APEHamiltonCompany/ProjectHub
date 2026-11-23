@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
 Set-Location $root
-$total = 7
+$total = 8
 
 function Write-Step($number, $title) {
     Write-Output ""
@@ -98,14 +98,57 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output "Dependencies installed in .venv"
 
-Write-Step 3 "Outlook"
+Write-Step 3 "Java (for .mpp schedules)"
+try {
+    $java = $null
+    if ($env:JAVA_HOME) {
+        $candidate = Join-Path $env:JAVA_HOME "bin\java.exe"
+        if (Test-Path $candidate) { $java = $candidate }
+    }
+    if (-not $java -and $env:LOCALAPPDATA) {
+        $jreRoot = Join-Path $env:LOCALAPPDATA "ProjectHub\jre"
+        if (Test-Path $jreRoot) {
+            $found = Get-ChildItem -Path $jreRoot -Filter "java.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $java = $found.FullName }
+        }
+    }
+    if (-not $java) {
+        $command = Get-Command java -ErrorAction SilentlyContinue
+        if ($command) { $java = $command.Source }
+    }
+    if ($java) {
+        Write-Output "Java found: $java"
+    } else {
+        $answer = Read-Host "Download a portable Java runtime (Microsoft OpenJDK 21, ~200 MB) for reading .mpp schedules? [y/N]"
+        if ($answer -match '^[Yy]') {
+            $zip = Join-Path ([System.IO.Path]::GetTempPath()) "projecthub-jdk21.zip"
+            $target = Join-Path $env:LOCALAPPDATA "ProjectHub\jre"
+            Invoke-WebRequest -Uri "https://aka.ms/download-jdk/microsoft-jdk-21-windows-x64.zip" -OutFile $zip -UseBasicParsing
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            Expand-Archive -Path $zip -DestinationPath $target -Force
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            $found = Get-ChildItem -Path $target -Filter "java.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+                Write-Output "Java installed: $($found.FullName)"
+            } else {
+                Write-Warning "The Java download finished but java.exe was not found under $target."
+            }
+        } else {
+            Write-Output ".mpp schedules need Java 11 or newer. A Project 'Save as XML' copy works without it."
+        }
+    }
+} catch {
+    Write-Warning "Java setup was skipped: $($_.Exception.Message)"
+}
+
+Write-Step 4 "Outlook"
 if (Test-Path "Registry::HKEY_CLASSES_ROOT\Outlook.Application") {
     Write-Output "Classic Outlook is registered."
 } else {
     Write-Output "WARNING: classic Outlook was not found. Reading email and calendar needs classic Outlook, not New Outlook. Setup continues."
 }
 
-Write-Step 4 "Configuration"
+Write-Step 5 "Configuration"
 if ($Console) {
     & $venvPython -m tracker.setup_wizard
 } else {
@@ -117,7 +160,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Step 5 "Background services"
+Write-Step 6 "Background services"
 $configPath = Join-Path $root "tracker\config.yaml"
 $port = 8765
 try {
@@ -149,13 +192,13 @@ if ($answer -eq "" -or $answer -match '^[Yy]') {
     }
 }
 
-Write-Step 6 "Desktop shortcut"
+Write-Step 7 "Desktop shortcut"
 $desktop = [Environment]::GetFolderPath("Desktop")
 $shortcut = Join-Path $desktop "Project Hub.url"
 Set-Content -Path $shortcut -Value @("[InternetShortcut]", "URL=http://localhost:$port/") -Encoding ASCII
 Write-Output "Shortcut: $shortcut"
 
-Write-Step 7 "Chrome extension (optional)"
+Write-Step 8 "Chrome extension (optional)"
 $answer = Read-Host "Set up the Chrome tab-group extension now? [Y/n]"
 if ($answer -eq "" -or $answer -match '^[Yy]') {
     $extension = Join-Path $root "chrome_extension"

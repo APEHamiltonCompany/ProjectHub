@@ -128,6 +128,17 @@ ape_sheet:
   stale_hours: 48
   url: "https://hamiltonmarketing.sharepoint.com/:x:/s/RNOAPE/IQDm4sasM7CTR6tIlW4RZwudAQ5vAffff0kaw_GEz2RITfA?e=Jraqhi"
 
+# --- MS Project schedule (read-only) ---------------------------------------------
+# The team schedule (.mpp, or a Project "Save as XML" .xml) is the source of truth for milestone dates and
+# assignments. A dated copy is kept in output/schedule and the parsed result in output/schedule_cache.json.
+ms_project:
+  path: ""              # e.g. R:/APE_AE/Project/APE Group Schedule.mpp (.mpp needs Java + `pip install mpxj JPype1`; a Project "Save as XML" .xml needs nothing)
+  resource: ""          # your resource name or email in the schedule; defaults to me.email, then me.name
+  authoritative: true   # schedule dates win over the kickoff-email chart
+  include_trt: false    # also read "TRT |" pre-sales rows
+  skip: ["[", "External Lab Space Requests"]   # level-1 section names that are never projects (a project also needs an SO-/QTE- number)
+  java_home: ""
+
 # --- Backup vault (offline copy of the project folder) ----------------------------
 # The hub copies the vault (and any extra folders) here every day at daily_time; a backup missed while the PC
 # was off runs at the next start. All files are copied. Files deleted on R: are moved to

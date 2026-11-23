@@ -395,6 +395,16 @@ How the sheet's SO Status maps to a stage:
 - **SO numbers for QTE projects**: the preview also lists SOs for QTE folders. Ticked when the sheet's QTE row and SO row share a Project ID (PRJ-…); unticked when only the 7-digit project number links them, when the project already has an SO, or when that SO already has its own folder (merge those by hand). **also rename folders** (on by default) renames to `SO-… (QTE-…)`.
 - Applied stages are pinned like a manual stage and labelled with the source "tracker sheet". A later sync may change them again; stages you set by hand are never ticked by default. Pick **Follow emails** on the project page to go back to email-driven stages.
 
+### 2.10b Project schedule (.mpp)
+The MS Project schedule is the source of truth for dates and assignments. Set the file in **Settings > Files**, **Project schedule (.mpp or .xml)**, or with `ms_project.path` in the config file. A `.mpp` needs Java 11 or newer and the `mpxj` package (setup installs the package and offers the Java runtime); a copy saved with Project's **Save as XML** needs neither.
+
+- Schedule dates win over the kickoff-email chart. The project page says **Dates from APE Group Schedule** (or **Dates from kickoff email chart** when the schedule has nothing for that project).
+- Schedule assignments appear as pending **From schedule** entries, with Create, Link and Dismiss working as they do for an email assignment.
+- A project the schedule assigns to someone else carries a **Not assigned to you in schedule** tag on its project page and board card.
+- The project page shows which schedule project a folder is linked to. **Unlink** stops using that schedule project's dates and assignment for the folder, so dates fall back to the kickoff email chart or the computed dates; **Use schedule again** restores the link.
+- When an SO appears on several schedule projects, the one whose customer matches the folder and shares the most SO and QTE numbers wins.
+- The file is read-only: the tracker reads a dated copy in `output\schedule\` and caches the result in `output\schedule_cache.json`. The original is never written to. When the file cannot be reached, the cached copy is used and the Dashboard line says so.
+
 ### 2.11 Timesheet
 Open **Timesheet** in the sidebar, or `http://localhost:8765/timesheet`. It shows one row per project for a week (Monday to Sunday by default) with **Prev**, **This week**, **Next** and a start/end date form for any other range up to 31 days.
 

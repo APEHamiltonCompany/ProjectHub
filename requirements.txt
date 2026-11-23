@@ -5,3 +5,5 @@ tzlocal
 pywin32
 flask
 openpyxl
+mpxj
+JPype1

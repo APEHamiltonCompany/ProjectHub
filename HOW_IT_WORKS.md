@@ -10,11 +10,12 @@ ProjectHub is two cooperating programs that share files on disk. There is no dat
 |---|---|---|
 | **Tracker** (batch job) | `python -m tracker.tracker` | Reads emails and calendar, works out deadlines, writes tasks into each project's `.md` note, and writes `output/snapshot.json`. |
 | **Hub** (web server) | `python -m tracker.hub` | Local Flask web app. Reads `snapshot.json` plus the notes and renders the dashboard in your browser. Runs the tracker on a timer and on demand. |
+| **Schedule** (input file) | `ms_project.path` | MS Project `.mpp` or `.xml` file read through `tracker/sources/ms_project.py`. Its dates and assignments win over the kickoff email chart. |
 
 ```
- Outlook (classic, COM, read-only)   saved .eml/.msg files   APE tracking .xlsx (read-only copy)
-                 \                         |                       /
-                  +--------------->  TRACKER run  <---------------+
+ Outlook (classic, COM, read-only)   saved .eml/.msg files   APE tracking .xlsx (read-only copy)   MS Project .mpp/.xml (read-only copy)
+                 \                         |                       /                                        /
+                  +--------------->  TRACKER run  <---------------+---------------------------------------+
                                        |      |
               project notes (.md)  <----+      +---->  output/snapshot.json, tracker/state.json
               (tasks added/updated)                          |
@@ -60,6 +61,8 @@ The KPI strip (`_kpis.html`) and pending-assignment panel (`_pending.html`) appe
 | `extract-msg` | Reading saved `.msg` emails |
 | `pywin32` | Classic Outlook COM access, Windows integration |
 | `tzlocal` | Local time zone handling |
+| `mpxj`, `JPype1` | Reading MS Project `.mpp` schedules through Java |
+| Java runtime (11+) | Needed by `mpxj` for `.mpp`; a Project `.xml` export needs no Java |
 
 Other resources: Python 3.10+, Windows (file locking uses `msvcrt`; Outlook, toasts and Task Scheduler are Windows features), classic Outlook (not "New Outlook"), standard-library `tkinter` for the setup window, and optionally Chrome plus the extension in `chrome_extension/`.
 
@@ -73,6 +76,8 @@ Data files:
 | `tracker/state.json` | Processed emails, pending assignments, due-date overrides, UI prefs, tick log |
 | `output/snapshot.json` | The tracker's latest result, which the dashboard renders |
 | `output/outlook_cache.json` | Cache of read mail, for incremental reads |
+| `output/schedule_cache.json` | Normalised MS Project schedule, reused until the file changes |
+| `output/schedule/` | Dated read-only copies of the schedule file |
 | `output/hub.log`, `hub_last_run.log`, `last_run.log` | Logs |
 | `<vault>/.../<project>.md` | The project notes that hold the tasks. These are the source of truth for ticks. |
 
@@ -111,6 +116,7 @@ A separate `ProjectTracker` scheduled task (`install_schedule.ps1`) runs the tra
    - reads emails: saved `.eml/.msg` files, project folders, and classic Outlook mail and calendar for the last `outlook_com.days_back` days (default 60). This is a **full read** and is the slowest step; results are cached in `output/outlook_cache.json`;
    - matches emails to projects, applies the triggers in `rules.yaml` to work out due dates (skipping `holidays`), and detects new assignment emails, which go to the **pending** list (or create folders automatically if `auto_create_projects` is true);
    - loads the APE tracking workbook (downloading a copy if its shortcut is configured and the copy is over `download_hours` old);
+   - reads the MS Project schedule when `ms_project.path` is set: the first run parses the file (starting Java for a `.mpp`) and caches the result in `output/schedule_cache.json`;
    - inserts or updates the tracker-owned task block inside each project note, keeping your marks;
    - writes `tracker/state.json`, appends to `output/last_run.log`, writes `output/dashboard.html` (a static report) and finally `output/snapshot.json`.
 4. **Page picks up the result.** The browser polls `/api/status` every 60 seconds; when `generated` changes and the page is idle, it reloads and shows data. A reload by hand also works once the run has finished.
@@ -129,6 +135,7 @@ The hub itself is stateless between launches. Everything it needs is on disk, so
 5. **Your edits survive.** Marks, manual tasks, stage changes made by hand, the selected layout, zoom and theme are all stored in notes or `state.json`.
 6. **Recurring refresh.** After startup, the loop wakes every 5 seconds and runs the tracker again when `refresh_minutes` (default 15) have passed and no run is active. `refresh_minutes: 0` disables the timer, leaving only manual refresh.
 7. **Scheduled tasks.** If the logon task is enabled, the hub launches at each login (`MultipleInstances IgnoreNew` prevents duplicates). The 06:30 `ProjectTracker` task updates data before you open the page.
+8. **The schedule cache is reused.** Later runs read `output/schedule_cache.json` and skip Java unless the schedule file's size or modification time changed.
 
 ## 7. What happens when you click a control
 
@@ -191,6 +198,7 @@ It does **not** restart the hub, reload `config.yaml` or force a full Outlook re
 | `tracker/hub/winfocus.py` | Brings the launched window to the foreground |
 | `tracker/tracker.py` | Tracker batch job |
 | `tracker/sources/` | Outlook COM, `.eml/.msg` folders, APE workbook readers |
+| `tracker/sources/ms_project.py` | MS Project `.mpp`/`.xml` reader, schedule cache, schedule matching and pending entries |
 | `tracker/matcher.py`, `extract.py`, `rules.py` | Email-to-project matching, parsing, rules engine |
 | `tracker/notes.py`, `state.py`, `settings.py`, `locking.py` | Note editing, state file, settings overlay, file lock |
 | `tracker/setup_gui.py`, `setup_wizard.py`, `setup.ps1` | Setup experience |

@@ -54,6 +54,11 @@ FIELD_MATCHERS = (
     ("comments", lambda h: h.startswith("comments / history")),
     ("need_by", lambda h: h.startswith("instr need-by")),
 )
+ROLE_MATCHERS = (
+    ("pm", lambda h: h == "project manager"),
+    ("me", lambda h: h.startswith("mechanical")),
+    ("ae", lambda h: h.startswith("automation")),
+)
 FIELD_NAMES = tuple(name for name, _match in FIELD_MATCHERS)
 TABS = (("Active", "Active Projects"), ("New", "New Projects"))
 COMPLETED_TAB = "Completed"
@@ -442,15 +447,62 @@ def _names_map(wb) -> dict[str, str]:
     return names
 
 
-def _resolve_names(value: str, names: dict[str, str]) -> str:
+def _role_names(wb) -> dict[str, dict[str, str]]:
+    roles: dict[str, dict[str, str]] = {}
+    if "Dropdowns" not in wb.sheetnames:
+        return roles
+    rows = [list(row or ()) for row in wb["Dropdowns"].iter_rows(values_only=True)]
+    header_index = None
+    columns: dict[int, str] = {}
+    for index, cells in enumerate(rows):
+        found: dict[int, str] = {}
+        for column, cell in enumerate(cells):
+            header = _header(cell)
+            if not header:
+                continue
+            for role, matches in ROLE_MATCHERS:
+                if matches(header) and column not in found:
+                    found[column] = role
+                    break
+        if found:
+            header_index = index
+            columns = found
+            break
+    if header_index is None:
+        return roles
+    for cells in rows[header_index + 1:]:
+        for column, role in columns.items():
+            if column + 1 >= len(cells):
+                continue
+            first, second = cells[column], cells[column + 1]
+            if not isinstance(first, str) or not isinstance(second, str):
+                continue
+            key = first.strip()
+            value = second.strip()
+            if not INITIALS_RE.match(key) or key in roles.get(role, {}):
+                continue
+            if not _looks_like_name(value):
+                continue
+            roles.setdefault(role, {})[key] = value
+    return roles
+
+
+def _resolve_names(value: str, names: dict[str, str], preferred: dict[str, str] | None = None) -> str:
     if not value:
         return ""
     parts = [part.strip() for part in re.split(r"[/,]", value) if part.strip()]
-    resolved = [names.get(part.upper()) or part for part in parts]
+    resolved = [(preferred or {}).get(part.upper()) or names.get(part.upper()) or part for part in parts]
     return ", ".join(resolved)
 
 
-def _record(row, columns: dict[str, int], tab: str, index: int, names: dict[str, str]) -> dict | None:
+def _record(
+    row,
+    columns: dict[str, int],
+    tab: str,
+    index: int,
+    names: dict[str, str],
+    roles: dict[str, dict[str, str]] | None = None,
+) -> dict | None:
     values = {name: "" for name in FIELD_NAMES}
     for name, column in columns.items():
         values[name] = _text(row[column] if column < len(row or ()) else None)
@@ -461,15 +513,16 @@ def _record(row, columns: dict[str, int], tab: str, index: int, names: dict[str,
     record = {"tab": tab, "row": index}
     record.update(values)
     record["comments"] = record["comments"][:1500]
-    record["pm_name"] = _resolve_names(values["pm"], names)
-    record["me_name"] = _resolve_names(values["me"], names)
+    role_names = roles or {}
+    record["pm_name"] = _resolve_names(values["pm"], names, role_names.get("pm"))
+    record["me_name"] = _resolve_names(values["me"], names, role_names.get("me"))
     record["support_name"] = _resolve_names(values["support"], names)
-    record["ae_name"] = _resolve_names(values["ae"], names)
+    record["ae_name"] = _resolve_names(values["ae"], names, role_names.get("ae"))
     record["keys"] = key_map
     return record
 
 
-def _rows_from(ws, tab: str, names: dict[str, str]) -> list[dict]:
+def _rows_from(ws, tab: str, names: dict[str, str], roles: dict[str, dict[str, str]] | None = None) -> list[dict]:
     rows: list[dict] = []
     columns: dict[str, int] = {}
     header_seen = False
@@ -480,7 +533,7 @@ def _rows_from(ws, tab: str, names: dict[str, str]) -> list[dict]:
             continue
         if not columns:
             break
-        record = _record(row, columns, tab, index, names)
+        record = _record(row, columns, tab, index, names, roles)
         if record is not None:
             rows.append(record)
     return rows
@@ -490,14 +543,15 @@ def _read(path: Path) -> tuple[list[dict], dict[str, str]]:
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         names = _names_map(wb)
+        roles = _role_names(wb)
         rows: list[dict] = []
         for tab, sheet_name in TABS:
             if sheet_name not in wb.sheetnames:
                 continue
-            rows.extend(_rows_from(wb[sheet_name], tab, names))
+            rows.extend(_rows_from(wb[sheet_name], tab, names, roles))
         for sheet_name in wb.sheetnames:
             if sheet_name.strip().lower().startswith(COMPLETED_PREFIX):
-                rows.extend(_rows_from(wb[sheet_name], COMPLETED_TAB, names))
+                rows.extend(_rows_from(wb[sheet_name], COMPLETED_TAB, names, roles))
         return rows, names
     finally:
         wb.close()

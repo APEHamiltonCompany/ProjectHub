@@ -16,6 +16,14 @@
   {% endif %}
 </p>
 
+{% if ms_project.ok and ms_project.stale %}
+<p class="sheet-status-line stale">Schedule: using cached copy ({{ ms_project.error }})</p>
+{% elif ms_project.ok %}
+<p class="sheet-status-line">Schedule: {{ ms_project.name }} &middot; file dated {{ ms_project.mtime_label }} &middot; {{ ms_project.mine }} mine / {{ ms_project.matched }} matched</p>
+{% elif ms_project.error and ms_project.error != "not configured" %}
+<p class="sheet-status-line stale">Schedule: {{ ms_project.error }}</p>
+{% endif %}
+
 {% include "_pending.html" %}
 {% include "_kpis.html" %}
 
