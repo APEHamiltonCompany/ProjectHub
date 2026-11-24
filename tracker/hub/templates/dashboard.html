@@ -23,7 +23,8 @@
 {% elif ms_project.error and ms_project.error != "not configured" %}
 <p class="sheet-status-line stale">Schedule: {{ ms_project.error }}</p>
 {% endif %}
-
+{% include "_auto_created.html" %}
+{% include "_transfers.html" %}
 {% include "_pending.html" %}
 {% include "_kpis.html" %}
 

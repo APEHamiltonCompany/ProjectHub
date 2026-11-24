@@ -335,7 +335,7 @@ def sample_email(message_id: str = "m1") -> Email:
 
 class PendingTests(unittest.TestCase):
     def _cfg(self, tmp: str) -> dict:
-        return {"vault": tmp, "auto_create_projects": False, "exclude_folders": []}
+        return {"vault": tmp, "exclude_folders": []}
 
     def _rules(self) -> dict:
         return rules_mod.load_rules(ROOT / "tracker" / "rules.yaml")

@@ -64,8 +64,13 @@
     <button type="button" class="btn" data-action="open" data-key="{{ project.key }}" data-what="folder">Open folder</button>
     <button type="button" class="btn" data-action="open" data-key="{{ project.key }}" data-what="note">Open note in editor</button>
     <button type="button" class="btn" data-action="new-task" data-key="{{ project.key }}">+ New task</button>
+    {% if project.archived %}<button type="button" class="btn" data-action="project-unarchive" data-key="{{ project.key }}">Reactivate</button>
+    {% else %}<button type="button" class="btn ghost" data-action="project-archive" data-key="{{ project.key }}" data-name="{{ project.name }}">Archive</button>{% endif %}
   </div>
 </section>
+{% if project.archived %}
+<div class="offline-banner warn">Archived{% if project.archived_at %} on {{ project.archived_at[:10] }}{% endif %}: the hub does not read this folder from R: and it is hidden from the boards. Its SO/QTE numbers still match emails{% if project.archived_new_emails %}: <strong>{{ project.archived_new_emails }} new email{{ '' if project.archived_new_emails == 1 else 's' }} since archiving</strong>{% endif %}. Reactivate to track it again.</div>
+{% endif %}
 
 <div class="project-grid">
   <div class="project-main">
@@ -96,7 +101,7 @@
             </div>
             <div class="task-launch">{% if task.launch %}<button type="button" class="btn small launch-btn" data-action="task-launch" data-key="{{ project.key }}" data-task-id="{{ task.id }}" title="{{ task.launch_title or task.launch }}">{% if task.launch_kind == "template" %}&#128196;{% else %}&#9654;{% endif %} {{ task.launch_label }}</button>{% endif %}{{ macros.track_btn(task) }}</div>
             <div class="task-meta">
-              <span class="nowrap">{{ task.due or "" }}{% if task.override_due %}<span class="small muted"> (override)</span>{% elif task.due_label %}<span class="small muted"> ({{ task.due_label }})</span>{% endif %}</span>
+              <span class="nowrap">{{ task.due or "" }}{% if task.override_due %}<span class="small muted"> (override)</span>{% elif task.milestone and task.due_source and task.due %}<span class="small muted" title="Where this date came from"> ({{ task.due_label or task.due_source }})</span>{% elif task.due_label %}<span class="small muted"> ({{ task.due_label }})</span>{% endif %}</span>
               {{ macros.status_pill(task.status) }}
             </div>
             {% if task.mark == " " and task.id %}

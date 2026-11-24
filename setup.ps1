@@ -100,25 +100,32 @@ Write-Output "Dependencies installed in .venv"
 
 Write-Step 3 "Java (for .mpp schedules)"
 try {
-    $java = $null
-    if ($env:JAVA_HOME) {
-        $candidate = Join-Path $env:JAVA_HOME "bin\java.exe"
-        if (Test-Path $candidate) { $java = $candidate }
+    function Test-JavaHome([string]$javaHome) {
+        if (-not $javaHome) { return $false }
+        if (-not (Test-Path (Join-Path $javaHome "bin\server\jvm.dll"))) { return $false }
+        $release = Join-Path $javaHome "release"
+        if (-not (Test-Path $release)) { return $false }
+        $line = Select-String -Path $release -Pattern 'JAVA_VERSION="(\d+)' | Select-Object -First 1
+        if (-not $line) { return $false }
+        return [int]$line.Matches[0].Groups[1].Value -ge 11
     }
-    if (-not $java -and $env:LOCALAPPDATA) {
+    $java = $null
+    $candidates = @($env:JAVA_HOME)
+    if ($env:LOCALAPPDATA) {
         $jreRoot = Join-Path $env:LOCALAPPDATA "ProjectHub\jre"
         if (Test-Path $jreRoot) {
-            $found = Get-ChildItem -Path $jreRoot -Filter "java.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $java = $found.FullName }
+            $candidates += Get-ChildItem -Path $jreRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
         }
     }
-    if (-not $java) {
-        $command = Get-Command java -ErrorAction SilentlyContinue
-        if ($command) { $java = $command.Source }
+    $command = Get-Command java -ErrorAction SilentlyContinue
+    if ($command) { $candidates += Split-Path (Split-Path $command.Source) }
+    foreach ($candidate in $candidates) {
+        if (Test-JavaHome $candidate) { $java = $candidate; break }
     }
     if ($java) {
-        Write-Output "Java found: $java"
+        Write-Output "Java 11+ found: $java"
     } else {
+        if ($command) { Write-Output "Java on PATH ($($command.Source)) is older than 11 or not a full runtime; .mpp schedules need Java 11+." }
         $answer = Read-Host "Download a portable Java runtime (Microsoft OpenJDK 21, ~200 MB) for reading .mpp schedules? [y/N]"
         if ($answer -match '^[Yy]') {
             $zip = Join-Path ([System.IO.Path]::GetTempPath()) "projecthub-jdk21.zip"

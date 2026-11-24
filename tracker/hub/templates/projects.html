@@ -47,6 +47,48 @@
   {% endif %}
 </section>
 
+{% if conflicts %}
+<section class="panel" id="number-conflicts">
+  <div class="panel-head"><h2>Numbers used by more than one folder</h2><span class="small muted">{{ conflicts|length }}</span></div>
+  <p class="small muted">Emails with one of these numbers all go to whichever folder is found first, and the others never get them. Usually one folder name has a typo: rename it in Explorer (or fix the number in its note) and click Refresh now.</p>
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead><tr><th>Number</th><th>Folders</th></tr></thead>
+      <tbody>
+      {% for conflict in conflicts %}
+        <tr><td class="nowrap mono">{{ conflict.number }}</td><td class="small">{{ conflict.folders|join("; ") }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel" id="email-import">
+  <div class="panel-head"><h2>Import projects from email</h2></div>
+  <p class="small muted">One-time setup help: reads older mail once and lists every assignment email addressed to you (To: line) that has no project folder yet. Projects whose emails show Completion are listed unticked. Ticked rows are created with their folder, note and template files; their dates and stage come from the old emails. Reading a year of mail can take several minutes.</p>
+  <div class="row stage-bulk">
+    <label class="small">Days back <input type="number" id="import-days" min="30" max="1825" value="{{ import_days }}" style="width:6em"></label>
+    <label class="small"><input type="checkbox" id="import-archive"> also read the Online Archive and PST files</label>
+    <button type="button" class="btn" data-action="import-scan">Scan email</button>
+    <span class="small muted" id="import-status"></span>
+  </div>
+  <div id="import-preview" hidden>
+    <div class="row stage-bulk">
+      <button type="button" class="btn primary small" data-action="import-create">Create selected</button>
+      <span class="small muted" id="import-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="projects-table">
+        <thead>
+          <tr><th><input type="checkbox" id="import-select-all" aria-label="Select all"></th><th>Assigned</th><th>Customer</th><th>Numbers</th><th>Stage from emails</th><th>Folder to create</th><th>Notes</th></tr>
+        </thead>
+        <tbody id="import-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
 <section class="panel" id="tracker-sync">
   <div class="panel-head"><h2>Sync to Project Tracker</h2></div>
   <p class="small muted">Reads the APE Project Tracking sheet (takes about a minute) and suggests a stage for each folder from its SO Status. Status 13, a Completed tab, or no longer on Active Projects means Completion; HOLD and On-Going are left alone. It also suggests SO numbers for QTE folders whose quote became an SO. Nothing changes until you click Apply.</p>
@@ -99,6 +141,7 @@
       </select>
     </label>
     <button type="button" class="btn small" data-action="stage-bulk">Set stage</button>
+    <button type="button" class="btn small" data-action="archive-selected">Archive selected</button>
     <span class="small muted" id="stage-selected-count">0 selected</span>
   </div>
   <div class="table-wrap">
@@ -115,13 +158,14 @@
           <td><a href="{{ url_for('project_page', key=row.key) }}">{{ row.name }}</a><div class="small muted">{{ row.project_no }}</div></td>
           <td>{{ row.customer }}</td>
           <td class="nowrap">{{ row.ident }}</td>
-          <td>{{ row.stage }}{% if row.stage_manual %} <span class="small muted" title="Set by hand">(manual)</span>{% endif %}</td>
+          <td>{{ row.stage }}{% if row.stage_manual %} <span class="small muted" title="Set by hand">(manual)</span>{% endif %}{% if row.archived %} <span class="badge archived">Archived</span>{% endif %}</td>
           <td class="nowrap">{{ row.open_count }}</td>
           <td class="nowrap">{{ row.last_email }}</td>
           <td class="small muted">{{ row.folder }}</td>
           <td class="nowrap">
             <button type="button" class="btn small" data-action="project-open-folder" data-key="{{ row.key }}" data-what="folder">Open folder</button>
-            <button type="button" class="btn small" data-action="project-archive" data-key="{{ row.key }}">Archive</button>
+            {% if row.archived %}<button type="button" class="btn small" data-action="project-unarchive" data-key="{{ row.key }}">Reactivate</button>
+            {% else %}<button type="button" class="btn small" data-action="project-archive" data-key="{{ row.key }}" data-name="{{ row.name }}">Archive</button>{% endif %}
             <button type="button" class="btn small danger" data-action="project-delete" data-key="{{ row.key }}" data-name="{{ row.name }}">Delete</button>
           </td>
         </tr>
@@ -134,12 +178,38 @@
 
 <section class="panel">
   <div class="panel-head"><h2>Archived</h2><span class="small muted">{{ archived|length }}</span></div>
+  <p class="small muted">Archived folders stay where they are. The hub does not read them from R: and hides them from the boards (use Show archived on the board). Their SO/QTE numbers still match emails.</p>
   {% if archived %}
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead><tr><th>Project</th><th>Customer</th><th>Archived</th><th>New emails</th><th></th></tr></thead>
+      <tbody>
+      {% for row in archived %}
+        <tr>
+          <td><a href="{{ url_for('project_page', key=row.key) }}">{{ row.name }}</a></td>
+          <td>{{ row.customer }}</td>
+          <td class="nowrap">{{ row.archived_at }}</td>
+          <td class="nowrap">{% if row.archived_new_emails %}<span class="pill pill-due-soon">{{ row.archived_new_emails }}</span>{% endif %}</td>
+          <td class="nowrap"><button type="button" class="btn small" data-action="project-unarchive" data-key="{{ row.key }}">Reactivate</button></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="small muted">Nothing archived.</p>
+  {% endif %}
+</section>
+
+{% if old_archive %}
+<section class="panel">
+  <div class="panel-head"><h2>Old _Archive folders</h2><span class="small muted">{{ old_archive|length }}</span></div>
+  <p class="small muted">Folders moved to _Archive by an older version. Restore moves them back into the vault.</p>
   <div class="table-wrap">
     <table class="projects-table">
       <thead><tr><th>Folder</th><th></th></tr></thead>
       <tbody>
-      {% for name in archived %}
+      {% for name in old_archive %}
         <tr>
           <td>{{ name }}</td>
           <td class="nowrap">
@@ -151,10 +221,8 @@
       </tbody>
     </table>
   </div>
-  {% else %}
-  <p class="small muted">Nothing archived.</p>
-  {% endif %}
 </section>
+{% endif %}
 
 <section class="panel">
   <div class="panel-head"><h2>Deleted</h2><span class="small muted">{{ deleted|length }}</span></div>

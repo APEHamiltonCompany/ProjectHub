@@ -56,8 +56,8 @@ class AddressedToMeTests(unittest.TestCase):
 
 
 class AssignmentToLineTests(unittest.TestCase):
-    def run_collect(self, mail: Email, auto_create: bool = False):
-        cfg = {"me": ME, "auto_create_projects": auto_create}
+    def run_collect(self, mail: Email, cfg_extra: dict | None = None):
+        cfg = {"me": ME, **(cfg_extra or {})}
         rules = rules_mod.load_rules(RULES)
         return collect_trigger_dates(cfg, rules, [], matcher.build_index([]), [mail], {}, True)
 
@@ -73,6 +73,14 @@ class AssignmentToLineTests(unittest.TestCase):
     def test_to_only_pends(self):
         _t, _u, pending, _m = self.run_collect(email(ASSIGNMENT, to="Jordan Poe; Cristian Uribe"))
         self.assertIn("m1", pending)
+
+    def test_old_auto_create_setting_still_only_pends(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = {"vault": tmp, "auto_create_projects": True}
+            _t, unmatched, pending, _m = self.run_collect(email(ASSIGNMENT, to="Cristian Uribe"), cfg)
+            self.assertIn("m1", pending)
+            self.assertEqual([u["reason"] for u in unmatched], ["no matching project"])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
 
 
 class ClassifyTests(unittest.TestCase):

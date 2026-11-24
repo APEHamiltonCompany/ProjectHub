@@ -240,6 +240,10 @@ def clean_settings(config_path: Path, answers: dict) -> list[str]:
         if isinstance(value, str) and value.strip() and _fwd(value.strip()) != _fwd(answers.get(key)):
             overlay.pop(key)
             removed.append(key)
+    if "auto_create_projects" in answers and isinstance(overlay.get("auto_create_projects"), bool):
+        if overlay["auto_create_projects"] != bool(answers["auto_create_projects"]):
+            overlay.pop("auto_create_projects")
+            removed.append("auto_create_projects")
     if removed:
         settings_mod.save_overlay(path, overlay)
     return removed

@@ -16,18 +16,21 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
-from flask import Flask, abort, g, jsonify, render_template, request, url_for
+from flask import Flask, abort, g, jsonify, render_template, request, send_file, url_for
 from markupsafe import Markup, escape
 
 from tracker import backup as backup_mod
+from tracker import importer
 from tracker import locking, matcher, notes
 from tracker import project_files
 from tracker import projects as projects_mod
 from tracker import rules as rules_mod
 from tracker import settings as settings_mod
 from tracker import state as state_mod
+from tracker import team as team_mod
 from tracker.hub import tasks as tasks_mod
 from tracker.hub import timesheet as timesheet_mod
+from tracker.hub.note_cache import NoteCache
 from tracker.hub import winfocus
 from tracker.sources import ape_sheet, outlook_com
 
@@ -79,6 +82,7 @@ def _ui_prefs(raw: dict) -> dict:
         "layout": layout if layout in LAYOUTS else "board",
         "zoom": zoom if zoom in ZOOMS else 100,
         "fit": True if fit is None else bool(fit),
+        "show_archived": bool(raw.get("show_archived")),
     }
 
 
@@ -105,6 +109,11 @@ def _ui_update(payload: dict) -> dict:
         if not isinstance(fit, bool):
             raise ValueError("fit")
         update["fit"] = fit
+    if "show_archived" in payload:
+        show = payload.get("show_archived")
+        if not isinstance(show, bool):
+            raise ValueError("show_archived")
+        update["show_archived"] = show
     if not update:
         raise ValueError("ui")
     return update
@@ -289,6 +298,7 @@ def create_app(
     snapshot_path = Path(cfg.get("snapshot_path") or (ROOT / "output" / "snapshot.json"))
     templates_dir = Path(cfg.get("templates_dir") or (ROOT / "templates"))
     live: dict = {}
+    note_cache = NoteCache()
 
     def apply_settings() -> None:
         hub = cfg.get("hub") or {}
@@ -360,6 +370,12 @@ def create_app(
         if cached is not None:
             return cached
         data = load_snapshot()
+        archived = state_mod.load(state_path).get("archived_projects") or {}
+        for project in data.get("projects") or []:
+            info = archived.get(project.get("key") or "")
+            project["archived"] = info is not None
+            if isinstance(info, dict) and not project.get("archived_at"):
+                project["archived_at"] = str(info.get("at") or "")
         g._hub_snapshot = data
         return data
 
@@ -785,6 +801,7 @@ def create_app(
                     run_log.parent.mkdir(parents=True, exist_ok=True)
                     with open(run_log, "a", encoding="utf-8") as fh:
                         fh.write(output)
+                note_cache.clear()
                 run_state["last_run"] = datetime.now().astimezone().isoformat(timespec="seconds")
                 run_state["last_exit"] = exit_code
                 queued = run_state["queued"]
@@ -1192,7 +1209,7 @@ def create_app(
                 trigger_id, _sep, offset = source.partition("+")
                 trigger = rules_mod.trigger_by_id(rules, trigger_id) or {}
                 return "from %s +%s" % (trigger.get("label") or trigger_id, offset)
-            return "computed"
+            return source if source and source != "chart" else "computed"
 
         def finish(row: dict) -> dict:
             due = row.get("due")
@@ -1244,6 +1261,10 @@ def create_app(
                 **launch_meta(target),
             }
 
+        note_cache.prefetch(
+            [project.get("note_path") for project in snapshot().get("projects") or [] if not project.get("archived")]
+            + [live["personal_path"]]
+        )
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
             name = project_label(project)
@@ -1252,9 +1273,8 @@ def create_app(
             project_stage = project.get("stage") or ""
             parsed: list[dict] = []
             launch_overrides: dict = {}
-            path = project.get("note_path") or ""
-            if path and notes.lp(path).is_file():
-                text, _nl, _bom, _enc = notes.read_text(path)
+            text = None if project.get("archived") else note_cache.read(project.get("note_path"))
+            if text is not None:
                 parsed = tasks_mod.parse_lines(text, archived=archived)
                 data, _raw, _body = notes.split_frontmatter(text)
                 if isinstance(data.get("task_launch"), dict):
@@ -1284,6 +1304,7 @@ def create_app(
                             "parent_title": titles.get(task.get("parent") or "", ""),
                             "milestone": bool(task.get("milestone")),
                             "mandatory": bool(task.get("mandatory")),
+                            "due_source": str(task.get("due_source") or ""),
                             "seq": seq,
                             "notes": entry["notes"] if entry else "",
                             "stage": stage,
@@ -1347,9 +1368,9 @@ def create_app(
                         }
                     )
                 )
-        if notes.lp(live["personal_path"]).is_file():
-            text, _nl, _bom, _enc = notes.read_text(live["personal_path"])
-            for row in tasks_mod.parse_lines(text, archived=archived):
+        personal_text = note_cache.read(live["personal_path"])
+        if personal_text is not None:
+            for row in tasks_mod.parse_lines(personal_text, archived=archived):
                 if row["id"].startswith(tasks_mod.MANUAL_PREFIX):
                     kind = "manual"
                 elif row["due"] is not None:
@@ -1363,8 +1384,9 @@ def create_app(
                     note_path = Path(row["note"])
                     if not note_path.is_absolute():
                         note_path = task_note_root() / note_path
-                    if notes.lp(note_path).is_file():
-                        note_data, _nraw, _nbody = notes.split_frontmatter(notes.read_text(note_path)[0])
+                    task_text = note_cache.read(note_path)
+                    if task_text is not None:
+                        note_data, _nraw, _nbody = notes.split_frontmatter(task_text)
                         launch = str(note_data.get("launch") or "")
                 items.append(
                     finish(
@@ -1406,13 +1428,12 @@ def create_app(
         setattr(g, cache_name, items)
         return items
 
-    def archived_tasks() -> list[dict]:
+    def archived_tasks(key: str) -> list[dict]:
+        """Archived manual tasks of one project, or of My Tasks when key is ""."""
         items: list[dict] = []
-        for project in snapshot().get("projects") or []:
-            path = project.get("note_path") or ""
-            if not path or not notes.lp(path).is_file():
-                continue
-            text, _nl, _bom, _enc = notes.read_text(path)
+        project = project_by_key(key) if key else None
+        text = note_cache.read(project.get("note_path")) if project else None
+        if text is not None:
             for row in tasks_mod.parse_lines(text, archived=True):
                 if not row["id"].startswith(tasks_mod.MANUAL_PREFIX):
                     continue
@@ -1425,9 +1446,9 @@ def create_app(
                         "mark": row["mark"],
                     }
                 )
-        if notes.lp(live["personal_path"]).is_file():
-            text, _nl, _bom, _enc = notes.read_text(live["personal_path"])
-            for row in tasks_mod.parse_lines(text, archived=True):
+        personal_text = None if key else note_cache.read(live["personal_path"])
+        if personal_text is not None:
+            for row in tasks_mod.parse_lines(personal_text, archived=True):
                 if not row["id"].startswith(tasks_mod.MANUAL_PREFIX):
                     continue
                 category = row["category"] or "personal"
@@ -1454,16 +1475,16 @@ def create_app(
             "item": item,
         }
 
-    def completed_keys() -> set[str]:
+    def archived_keys() -> set[str]:
         return {
             str(project.get("key") or "")
             for project in snapshot().get("projects") or []
-            if (project.get("stage") or "") == COMPLETION_STAGE
+            if project.get("archived")
         }
 
     def open_tasks(today: date) -> list[dict]:
-        """Live tasks without the projects in Completion (they only show as a count on the board)."""
-        done = completed_keys()
+        """Live tasks without the archived projects (they only show on the board when Show archived is on)."""
+        done = archived_keys()
         return [item for item in live_tasks(today) if item["key"] not in done]
 
     def gantt_rows(today: date) -> list[dict]:
@@ -1500,16 +1521,16 @@ def create_app(
             "overdue": sum(1 for item in items if item["status"] == "overdue"),
             "due_soon": sum(1 for item in items if item["status"] == "due-soon"),
             "open": sum(1 for item in items if item["mark"] == " "),
-            "projects": len(snapshot().get("projects") or []) - len(completed_keys()),
+            "projects": len(snapshot().get("projects") or []) - len(archived_keys()),
             "done_this_week": done_this_week,
         }
 
-    def project_cards(today: date, state: dict) -> list[dict]:
-        items = open_tasks(today)
+    def project_cards(today: date, state: dict, show_archived: bool = False) -> list[dict]:
+        items = live_tasks(today) if show_archived else open_tasks(today)
         cards = []
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
-            if (project.get("stage") or "") == COMPLETION_STAGE:
+            if project.get("archived") and not show_archived:
                 continue
             rows = [
                 item for item in items if item["key"] == key and item["kind"] in ("workflow", "pm", "manual")
@@ -1554,23 +1575,28 @@ def create_app(
                     if dated
                     else None,
                     "links": len(project_links(project, state)),
+                    "archived": bool(project.get("archived")),
+                    "archived_new_emails": int(project.get("archived_new_emails") or 0),
+                    "can_archive": (project.get("stage") or "") == COMPLETION_STAGE,
                 }
             )
         return cards
 
-    def board_columns(cards: list[dict], stages: list[str], completed: int = 0) -> list[dict]:
+    def board_columns(cards: list[dict], stages: list[str]) -> list[dict]:
         order = list(lifecycle or stages)
-        for card in cards:
+        active = [card for card in cards if not card.get("archived")]
+        archived = [card for card in cards if card.get("archived")]
+        for card in active:
             stage = card["stage"] or "Other"
             if stage not in order:
                 order.append(stage)
         columns = []
         for stage in order:
-            rows = [card for card in cards if (card["stage"] or "Other") == stage]
-            if stage == COMPLETION_STAGE:
-                columns.append({"stage": stage, "cards": [], "collapsed": True, "count": completed + len(rows)})
-            elif rows or stage in lifecycle:
+            rows = [card for card in active if (card["stage"] or "Other") == stage]
+            if rows or stage in lifecycle:
                 columns.append({"stage": stage, "cards": rows, "count": len(rows)})
+        if archived:
+            columns.append({"stage": "Archived", "cards": archived, "count": len(archived), "archived": True})
         return columns
 
     def focus_buckets(today: date, items: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -1613,7 +1639,7 @@ def create_app(
         rows = []
         for project in snapshot().get("projects") or []:
             key = project.get("key") or ""
-            if (project.get("stage") or "") == COMPLETION_STAGE:
+            if project.get("archived"):
                 continue
             mine = [item for item in items if item["key"] == key]
             overdue = sum(1 for item in mine if item["status"] == "overdue")
@@ -1645,6 +1671,7 @@ def create_app(
             origin = request.headers.get("Origin")
             if origin and origin not in allowed_origins:
                 return "forbidden", 403
+            note_cache.clear()
         return None
 
     def schedule_view() -> dict:
@@ -1653,6 +1680,12 @@ def create_app(
         data["name"] = Path(source).name if source else ""
         data["mtime_label"] = _when(str(data.get("file_mtime") or ""))
         return data
+
+    @app.after_request
+    def forget_written_notes(response):
+        if request.method == "POST":
+            note_cache.clear()
+        return response
 
     @app.context_processor
     def inject_globals():
@@ -1673,6 +1706,8 @@ def create_app(
             "ape_sheet": snapshot().get("ape_sheet") or {},
             "ms_project": schedule_view(),
             "backup_line": backup_line(),
+            "team_nav": bool(team_mod.conf(cfg).get("manager_mode"))
+            or bool(team_cache["data"] and team_cache["data"].get("manager")),
         }
 
     @app.get("/")
@@ -1687,7 +1722,7 @@ def create_app(
         upcoming = [task_row(item) for item in items if item["status"] == "upcoming"]
         projects = []
         for project in snap.get("projects") or []:
-            if (project.get("stage") or "") == COMPLETION_STAGE:
+            if project.get("archived"):
                 continue
             open_rows = [
                 item for item in items if item["key"] == (project.get("key") or "") and item["mark"] == " "
@@ -1710,13 +1745,19 @@ def create_app(
             item = dict(entry)
             item["override"] = email_overrides.get(entry.get("message_id")) or ""
             unmatched.append(item)
-        cards = project_cards(today, state)
+        show_archived = ui_prefs()["show_archived"]
+        cards = project_cards(today, state, show_archived)
         buckets, done_week = focus_buckets(today, items)
         personal = [item for item in items if item["key"] == ""]
+        auto_created = [entry for entry in state.get("auto_created") or [] if not entry.get("dismissed")][-20:]
         return render_template(
             "dashboard.html",
+            auto_created=list(reversed(auto_created)),
+            auto_create=snap.get("auto_create") or {},
+            team=team_info() if team_mod.conf(cfg).get("publish") or team_mod.conf(cfg).get("manager_mode") else None,
+            owner_flags=[p for p in snap.get("projects") or [] if p.get("owner_flags") and not p.get("archived")],
             pending=pending_rows,
-            folders=folder_choices(),
+            folders=folder_choices() if pending_rows else [],
             overdue=overdue,
             soon=soon,
             upcoming=upcoming,
@@ -1728,12 +1769,14 @@ def create_app(
             gantt=gantt_rows(today),
             kpis=kpis(today),
             project_cards=cards,
-            board_columns=board_columns(cards, stages + ["Other"], len(completed_keys())),
+            board_columns=board_columns(cards, stages + ["Other"]),
+            show_archived=show_archived,
+            archived_count=len(archived_keys()),
             buckets=buckets,
             done_week=done_week,
             personal=personal,
             personal_groups=group_by_category(personal),
-            archived_personal=[item for item in archived_tasks() if item["key"] == ""],
+            archived_personal=archived_tasks(""),
             stages=stages + ["Other"],
             layout=current_layout(),
         )
@@ -1752,6 +1795,7 @@ def create_app(
                     layout=current_layout(),
                 )
             abort(404)
+        note_cache.forget(project.get("note_path"))
         state = state_mod.load(state_path)
         view = note_view(project)
         today = date.today()
@@ -1801,7 +1845,7 @@ def create_app(
             tasks=tasks,
             stages=lifecycle or stages,
             gantt=gantt,
-            archived_project=[item for item in archived_tasks() if item["key"] == key],
+            archived_project=archived_tasks(key),
             layout=current_layout(),
             so_hints=project_so_hints(project),
             so_can_rename=bool(so_rename_target(project, ["SO-000000"])),
@@ -1965,9 +2009,13 @@ def create_app(
                     "open_count": len(open_rows),
                     "last_email": dates[-1][:10] if dates else "",
                     "folder": project.get("folder") or "",
+                    "archived": bool(project.get("archived")),
+                    "archived_at": str(project.get("archived_at") or "")[:10],
+                    "archived_new_emails": int(project.get("archived_new_emails") or 0),
                 }
             )
-        archived = archived_names()
+        archived = [row for row in rows if row["archived"]]
+        old_archive = archived_names()
         deleted = []
         try:
             for entry in sorted(deleted_root().iterdir(), key=lambda p: p.name, reverse=True):
@@ -1980,8 +2028,11 @@ def create_app(
             rows=rows,
             stage_filter=str(request.args.get("stage") or ""),
             archived=archived,
+            old_archive=old_archive,
             deleted=deleted,
             pending=pending_new(),
+            conflicts=snapshot().get("conflicts") or [],
+            import_days=importer.IMPORT_DAYS,
             backup_root=str(backup_root()),
             folder_layout=matcher.folder_layout(cfg),
             layout=current_layout(),
@@ -2672,21 +2723,63 @@ def create_app(
     @app.post("/api/projects/archive")
     def api_projects_archive():
         payload = request.get_json(silent=True) or {}
+        if isinstance(payload.get("keys"), list):
+            entries: dict[str, dict] = {}
+            failed: list[str] = []
+            stamp = datetime.now().isoformat(timespec="seconds")
+            for value in payload["keys"]:
+                one = str(value or "")
+                _project, folder, error = project_folder(one)
+                if folder is None:
+                    failed.append("%s: %s" % (one, error))
+                    continue
+                entries[one] = {"rel": rel_folder(folder), "at": stamp}
+
+            def apply_many(state: dict) -> int:
+                archived = state.get("archived_projects") or {}
+                fresh = {k: v for k, v in entries.items() if k not in archived}
+                archived.update(fresh)
+                state["archived_projects"] = archived
+                return len(fresh)
+
+            count = mutate_state(apply_many) if entries else 0
+            return jsonify({"ok": True, "archived": count, "failed": failed})
         key = str(payload.get("key") or "")
         project, folder, error = project_folder(key)
         if project is None:
             return jsonify({"error": error}), 404
         if folder is None:
             return jsonify({"error": error}), 400
-        target = live["vault"] / matcher.ARCHIVE_DIR / rel_folder(folder)
-        if notes.lp(target).exists():
-            return jsonify({"error": "already archived: %s" % rel_folder(folder)}), 409
-        try:
-            move_folder(folder, target, stop=live["vault"])
-        except OSError as exc:
-            return jsonify({"error": "Could not move the folder (is a file open?): %s" % exc}), 500
+        entry = {"rel": rel_folder(folder), "at": datetime.now().isoformat(timespec="seconds")}
+
+        def apply(state: dict) -> bool:
+            archived = state.get("archived_projects") or {}
+            if key in archived:
+                return False
+            archived[key] = entry
+            state["archived_projects"] = archived
+            return True
+
+        if not mutate_state(apply):
+            return jsonify({"error": "already archived"}), 409
+        return jsonify({"ok": True, "archived": key, "folder": entry["rel"]})
+
+    @app.post("/api/projects/unarchive")
+    def api_projects_unarchive():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+
+        def apply(state: dict) -> bool:
+            archived = state.get("archived_projects") or {}
+            if archived.pop(key, None) is None:
+                return False
+            state["archived_projects"] = archived
+            return True
+
+        if not mutate_state(apply):
+            return jsonify({"error": "not archived"}), 404
         start_run()
-        return jsonify({"ok": True, "moved_to": str(target)})
+        return jsonify({"ok": True, "reactivated": key})
 
     @app.post("/api/projects/delete")
     def api_projects_delete():
@@ -2716,6 +2809,7 @@ def create_app(
             links = state.get("user_links") or {}
             links.pop(key, None)
             state["user_links"] = links
+            (state.get("archived_projects") or {}).pop(key, None)
             for entry in (state.get("pending") or {}).values():
                 names = {str(entry.get("suggested_folder") or ""), projects_mod.suggested_folder(cfg, entry)}
                 if names & {relative, folder.name}:
@@ -3546,6 +3640,244 @@ def create_app(
             out.append(item)
         return out
 
+    import_job: dict = {"running": False, "phase": "", "message": "", "rows": [], "error": "", "result": None}
+
+    def with_com(fn):
+        try:
+            import pythoncom
+        except ImportError:
+            return fn()
+        pythoncom.CoInitialize()
+        try:
+            return fn()
+        finally:
+            pythoncom.CoUninitialize()
+
+    def import_projects_known() -> list:
+        from tracker.models import Project
+
+        return [
+            Project(
+                folder=str(row.get("folder") or ""),
+                name=str(row.get("name") or ""),
+                project_no=str(row.get("project_no") or ""),
+                so=list(row.get("so") or []),
+                qte=list(row.get("qte") or []),
+            )
+            for row in load_snapshot().get("projects") or []
+        ]
+
+    def import_scan_job(days: int, include_archive: bool) -> None:
+        try:
+            def progress(number: int, total: int, folder_name: str) -> None:
+                import_job["message"] = "Reading mail folder %d of %d: %s" % (number, total, folder_name)
+
+            emails = with_com(lambda: outlook_com.collect_headers(cfg, days, include_archive, progress))
+            import_job["message"] = "Read %d emails, checking the tracker sheet..." % len(emails)
+            sheet_rows = None
+            try:
+                sheet = ape_sheet.load(cfg, download=False)
+                if sheet.get("ok"):
+                    sheet_rows = sheet.get("rows") or []
+            except Exception:
+                sheet_rows = None
+            rows = importer.build_preview(cfg, rules, import_projects_known(), emails, sheet_rows)
+            import_job.update(rows=rows, message="Read %d emails: %d project%s without a folder." % (len(emails), len(rows), "" if len(rows) == 1 else "s"))
+        except Exception as exc:
+            import_job.update(error="Could not read the mail: %s" % (str(exc) or exc.__class__.__name__), rows=[])
+        finally:
+            import_job["running"] = False
+
+    def import_create_job(picked: list[dict]) -> None:
+        try:
+            def body_for(row: dict) -> str:
+                import_job["message"] = "Creating %s..." % row.get("folder")
+                return outlook_com.item_body(row["entry_id"]) if row.get("entry_id") else ""
+
+            created, failed = with_com(lambda: importer.create_rows(cfg, picked, body_for))
+            stamp = datetime.now().isoformat(timespec="seconds")
+
+            def apply(state: dict) -> None:
+                stored = state.get("projects") or {}
+                for item in created:
+                    bucket = stored.setdefault(item["key"], {})
+                    for trigger_id, value in item["triggers"].items():
+                        bucket.setdefault(trigger_id, value)
+                state["projects"] = stored
+                pending = state.get("pending") or {}
+                for item in created:
+                    if item["id"] in pending:
+                        pending[item["id"]]["status"] = "created"
+                imported = list(state.get("imported") or [])
+                imported.extend({"key": item["key"], "folder": rel_folder(Path(item["folder"])), "at": stamp} for item in created)
+                state["imported"] = imported[-500:]
+
+            if created:
+                mutate_state(apply)
+            done = {item["id"] for item in created}
+            import_job["rows"] = [row for row in import_job["rows"] if row["id"] not in done]
+            import_job.update(result={"created": len(created), "failed": failed}, message="Created %d project%s." % (len(created), "" if len(created) == 1 else "s"))
+            if created:
+                start_run()
+        except Exception as exc:
+            import_job.update(error="Import failed: %s" % (str(exc) or exc.__class__.__name__))
+        finally:
+            import_job["running"] = False
+
+    def import_status_payload() -> dict:
+        return {
+            "running": import_job["running"],
+            "phase": import_job["phase"],
+            "message": import_job["message"],
+            "error": import_job["error"],
+            "rows": [] if import_job["running"] else [
+                {k: v for k, v in row.items() if k != "entry_id"} for row in import_job["rows"]
+            ],
+            "result": import_job["result"],
+        }
+
+    @app.post("/api/import/scan")
+    def api_import_scan():
+        payload = request.get_json(silent=True) or {}
+        if import_job["running"]:
+            return jsonify({"error": "an import is already running"}), 409
+        try:
+            days = int(payload.get("days") or importer.IMPORT_DAYS)
+        except (TypeError, ValueError):
+            return jsonify({"error": "days must be a number"}), 400
+        days = max(30, min(days, 1825))
+        import_job.update(running=True, phase="scan", message="Reading mail headers...", error="", rows=[], result=None)
+        threading.Thread(target=import_scan_job, args=(days, bool(payload.get("include_archive"))), daemon=True).start()
+        return jsonify({"ok": True, "started": True})
+
+    @app.get("/api/import/status")
+    def api_import_status():
+        return jsonify(import_status_payload())
+
+    @app.post("/api/import/create")
+    def api_import_create():
+        payload = request.get_json(silent=True) or {}
+        ids = {str(value) for value in payload.get("ids") or [] if value}
+        if import_job["running"]:
+            return jsonify({"error": "an import is already running"}), 409
+        if not ids:
+            return jsonify({"error": "nothing selected"}), 400
+        picked = [row for row in import_job["rows"] if row["id"] in ids]
+        if not picked:
+            return jsonify({"error": "scan again: those rows are no longer in the preview"}), 409
+        import_job.update(running=True, phase="create", message="Creating projects...", error="", result=None)
+        threading.Thread(target=import_create_job, args=(picked,), daemon=True).start()
+        return jsonify({"ok": True, "started": True, "count": len(picked)})
+
+    @app.post("/api/auto-created/dismiss")
+    def api_auto_created_dismiss():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+
+        def apply(state: dict) -> int:
+            count = 0
+            for entry in state.get("auto_created") or []:
+                if not entry.get("dismissed") and (not key or entry.get("key") == key):
+                    entry["dismissed"] = True
+                    count += 1
+            return count
+
+        return jsonify({"ok": True, "dismissed": mutate_state(apply)})
+
+    team_cache: dict = {"at": 0.0, "data": None}
+
+    def team_info(fresh: bool = False) -> dict:
+        """Roster, my role and my transfers from R:; cached a minute so a dead share does not slow every page."""
+        if not fresh and team_cache["data"] is not None and time.time() - team_cache["at"] < 60:
+            return team_cache["data"]
+        ok, why = team_mod.available(cfg)
+        roster = team_mod.read_roster(cfg) if ok else []
+        data = {
+            "ok": ok,
+            "why": why,
+            "roster": roster,
+            "manager": team_mod.manager_mode(cfg, roster),
+            "can_reassign": ok and team_mod.can_reassign(cfg, roster),
+            "transfers": team_mod.my_transfers(cfg, roster) if ok else {"incoming": [], "outgoing": []},
+        }
+        team_cache.update(at=time.time(), data=data)
+        return data
+
+    @app.get("/team")
+    def team_page():
+        info = team_info(fresh=True)
+        if not info["manager"]:
+            abort(404)
+        statuses = team_mod.load_statuses(cfg, info["roster"]) if info["ok"] else []
+        rows = []
+        for person in statuses:
+            for project in person.get("projects") or []:
+                rows.append(dict(project, ae=person.get("name") or ""))
+        requests_ = team_mod.list_requests(cfg, info["roster"]) if info["ok"] else []
+        return render_template(
+            "team.html",
+            info=info,
+            statuses=statuses,
+            rows=rows,
+            pms=sorted({row["pm"] for row in rows if row.get("pm")}),
+            aes=sorted({row["ae"] for row in rows if row.get("ae")}),
+            requests=requests_,
+        )
+
+    @app.get("/team/view.js")
+    def team_view_js():
+        return send_file(team_mod.VIEW_SOURCE, mimetype="text/javascript", max_age=0)
+
+    @app.post("/api/team/reassign")
+    def api_team_reassign():
+        payload = request.get_json(silent=True) or {}
+        info = team_info(fresh=True)
+        if not info["can_reassign"]:
+            return jsonify({"error": info["why"] or "only the team manager or the principal engineer can reassign"}), 403
+        from_name = str(payload.get("from") or "")
+        key = str(payload.get("key") or "")
+        status = next((s for s in team_mod.load_statuses(cfg, info["roster"]) if s.get("name") == from_name), None)
+        project = next((p for p in (status or {}).get("projects") or [] if p.get("key") == key), None)
+        if project is None:
+            return jsonify({"error": "%s is not in %s's published status" % (key, from_name)}), 404
+        try:
+            created = team_mod.write_request(cfg, project, from_name, str(payload.get("to") or ""), info["roster"])
+        except (PermissionError, ValueError, OSError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        team_cache["data"] = None
+        return jsonify({"ok": True, "id": created["id"]})
+
+    def find_transfer(request_id: str, side: str) -> dict | None:
+        info = team_info(fresh=True)
+        return next((r for r in info["transfers"][side] if r.get("id") == request_id), None)
+
+    @app.post("/api/team/transfer/import")
+    def api_team_transfer_import():
+        found = find_transfer(str((request.get_json(silent=True) or {}).get("id") or ""), "incoming")
+        if found is None:
+            return jsonify({"error": "transfer not found (or R: is not reachable)"}), 404
+        try:
+            result = team_mod.import_transfer(cfg, found)
+        except (PermissionError, FileNotFoundError, FileExistsError, OSError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        team_cache["data"] = None
+        start_run()
+        return jsonify({"ok": True, "folder": result["folder"]})
+
+    @app.post("/api/team/transfer/ack")
+    def api_team_transfer_ack():
+        payload = request.get_json(silent=True) or {}
+        side = "incoming" if payload.get("side") == "incoming" else "outgoing"
+        found = find_transfer(str(payload.get("id") or ""), side)
+        if found is None:
+            return jsonify({"error": "transfer not found (or R: is not reachable)"}), 404
+        try:
+            team_mod.write_reply(cfg, found, "acknowledged" if side == "outgoing" else "declined")
+        except OSError as exc:
+            return jsonify({"error": str(exc)}), 400
+        team_cache["data"] = None
+        return jsonify({"ok": True})
+
     @app.post("/api/tracker-sync/preview")
     def api_tracker_sync_preview():
         sheet = ape_sheet.load(cfg, download=True)
@@ -3762,6 +4094,7 @@ def create_app(
             "due_soon_days": live["due_soon_days"],
             "theme": live["theme"],
             "auto_reload_pages": live["auto_reload_pages"],
+            "auto_create_projects": bool(cfg.get("auto_create_projects")),
             "ui": ui_prefs(),
             "checklist_optional": [
                 item_id
@@ -3811,6 +4144,11 @@ def create_app(
             if not isinstance(value, bool):
                 return jsonify({"error": "auto_reload_pages must be true or false"}), 400
             overlay["auto_reload_pages"] = value
+        if "auto_create_projects" in payload:
+            value = payload.get("auto_create_projects")
+            if not isinstance(value, bool):
+                return jsonify({"error": "auto_create_projects must be true or false"}), 400
+            overlay["auto_create_projects"] = value
         if "checklist_optional" in payload:
             value = payload.get("checklist_optional")
             if not isinstance(value, list):

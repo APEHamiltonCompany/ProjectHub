@@ -66,6 +66,7 @@ class Project:
     schedule_mine: bool | None = None
     schedule_project: str = ""
     schedule_unlinked: bool = False
+    archived: bool = False
 
     @property
     def key(self) -> str:

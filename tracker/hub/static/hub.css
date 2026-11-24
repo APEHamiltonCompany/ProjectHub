@@ -414,6 +414,7 @@ a.chip:hover { text-decoration: none; border-color: var(--accent); color: var(--
   color: var(--accent);
 }
 .badge.level { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+.badge.archived { background: var(--panel-2); color: var(--muted); border: 1px dashed var(--line); }
 
 .tick { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .tick-box {
@@ -532,8 +533,7 @@ a.chip:hover { text-decoration: none; border-color: var(--accent); color: var(--
 .board { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 16px; align-items: flex-start; }
 .board-col { flex: 0 0 288px; width: 288px; }
 .board-col-personal { flex-basis: 300px; }
-.board-col.is-collapsed { flex: 0 0 170px; width: 170px; }
-.fit-board .board-col.is-collapsed { flex: 0.45 1 0; }
+.board-col-archived .card { opacity: .75; }
 .board-col-head {
   display: flex;
   align-items: center;
@@ -971,3 +971,19 @@ textarea#note-text {
 .backup-alert.warn { color: var(--warn); }
 .backup-actions { margin-top: 10px; }
 .backup-last { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+
+.tv-filters { margin: 10px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tv-gantt { border: 1px solid var(--line); border-radius: 6px; padding: 6px; background: var(--card); }
+.tv-row { display: flex; align-items: center; border-bottom: 1px solid var(--line); min-height: 26px; }
+.tv-head { font-weight: 600; height: 22px; }
+.tv-label { width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 8px; font-size: 12px; }
+.tv-label .btn { margin-left: 6px; padding: 0 6px; }
+.tv-track { position: relative; flex: 1; height: 18px; }
+.tv-tick { position: absolute; font-size: 10px; color: var(--muted); border-left: 1px solid var(--line-strong); padding-left: 2px; height: 18px; }
+.tv-bar { position: absolute; top: 4px; height: 10px; background: var(--st-upcoming); border-radius: 3px; }
+.tv-bar.tv-late { background: var(--st-overdue); }
+.tv-today { position: absolute; top: 0; bottom: 0; border-left: 2px solid var(--warn); }
+.tv-muted { color: var(--muted); }
+.tv-flag { background: var(--accent-soft); border-radius: 3px; padding: 0 4px; font-size: 11px; }
+.tv-table { border-collapse: collapse; }
+.tv-table td, .tv-table th { border: 1px solid var(--line); padding: 3px 8px; text-align: left; }

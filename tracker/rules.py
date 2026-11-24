@@ -59,6 +59,12 @@ def keyword_pattern(keyword: str) -> str:
     return r"\s*".join(re.escape(part) for part in parts)
 
 
+def has_project_id(subject: str) -> bool:
+    from . import matcher
+
+    return matcher.has_keys(matcher.extract_keys(subject or ""))
+
+
 def trigger_matches(trigger: dict, subject: str) -> bool:
     pattern = trigger.get("subject_regex")
     if pattern and re.search(pattern, subject, re.I):
@@ -66,6 +72,10 @@ def trigger_matches(trigger: dict, subject: str) -> bool:
         return not (exclude and re.search(exclude, subject, re.I))
     for keyword in split_keywords(trigger.get("keywords")):
         if re.search(keyword_pattern(keyword), subject, re.I):
+            return True
+    # Short words like "KO" count only as a whole word, and only when the subject also names an SO, QTE or 020 number.
+    for keyword in split_keywords(trigger.get("id_keywords")):
+        if re.search(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % keyword_pattern(keyword), subject, re.I) and has_project_id(subject):
             return True
     return False
 

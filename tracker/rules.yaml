@@ -7,7 +7,8 @@ buckets: [Pre-Kickoff, Pre-Fabrication, Fabrication, System Test, Closeout, Comp
 # A project sits in the furthest bucket any of its emails reached.
 triggers:
   - {id: assignment, label: Project assignment, stage: Pre-Kickoff, keywords: ['Project Assignment -'], no_reply: true}
-  - {id: kickoff, label: Kickoff, stage: Pre-Fabrication, keywords: [kickoff, kick off]}
+  # id_keywords: whole word, and only when the subject also has an SO, QTE or 020 number ("SO-268679 - Pfizer KO Schedule").
+  - {id: kickoff, label: Kickoff, stage: Pre-Fabrication, keywords: [kickoff, kick off, kick-off], id_keywords: [KO]}
   - {id: internal_design_review, label: Internal design review, stage: Pre-Fabrication, keywords: [internal design review, internal review, DR internal, internal DR]}
   - {id: design_review, label: Design review, stage: Pre-Fabrication, keywords: [design review]}
   - {id: work_order_firm, label: Work order firm, stage: Fabrication, keywords: [WO firm, work order firm]}
@@ -20,7 +21,8 @@ stages:
   - System Test
   - Closeout
   - Completion
-# PM schedule rows read from the kickoff email (newest chart in the KO thread). Only these become deadlines.
+# PM schedule rows read from the project's timeline tables. Only these become deadlines.
+# Each milestone takes its dates from the newest PM table that lists it (kickoff, A&T notification, or a PM reply in the thread).
 # match: regexes tried against the row name with the customer/SO prefix removed. A milestone is due on the row's finish date.
 # optional: only added when the chart has the row, or (no chart yet) the project level is in levels.
 milestones:
@@ -33,7 +35,7 @@ milestones:
   - {id: ms_pack_up, stage: System Test, title: "AE Pack Up", match: ['^AE Pack\s*Up', '^Pack\s*Up$', '^AE Disassembly']}
   - {id: ms_closeout, stage: Closeout, title: "AutoE Close Out", match: ['^AutoE Close\s*Out']}
 # Checklist steps. milestone: the PM row the step sits under (due on that row's finish date).
-# trigger + offset: an email that re-dates the step (business days after it); it wins over the milestone once it arrives.
+# trigger + offset: an email that dates the step (business days after it), used only while its milestone has no date.
 # levels: project levels that get the step (all when omitted). repeat: false hides it on repeat projects (L1R, L2R...).
 # mandatory: true = always on for every project (levels/repeat ignored). Every other step and milestone is optional:
 # each user ticks the ones they want in Settings > Project checklist, and only the generated items count toward status.

@@ -9,6 +9,8 @@
     <label class="field"><span>Auto refresh interval (minutes, 0 = off)</span><input type="number" id="set-refresh" min="0" max="1440" value="{{ settings.refresh_minutes }}"></label>
   </div>
   <label class="check-field"><input type="checkbox" id="set-auto-reload"{% if settings.auto_reload_pages %} checked{% endif %}><span>Reload open hub pages after each refresh</span></label>
+  <label class="check-field"><input type="checkbox" id="set-auto-create"{% if settings.auto_create_projects %} checked{% endif %}><span>Create project folders automatically from assignment emails addressed to me (To: line)</span></label>
+  <p class="small muted">Off: new assignments wait on the Dashboard for Create, Link or Dismiss. On: the folder, note and template files are made during the refresh, listed under "Created automatically" with Delete. Never runs when the vault is unreachable, when working from the backup, when the scan finds far fewer folders than last time, or when a folder already has one of the email's numbers.</p>
 </section>
 
 <section class="panel">

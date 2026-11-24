@@ -279,24 +279,42 @@ class ProjectsAdminTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertFalse(client.get("/api/status", headers=HOST).get_json()["running"])
 
-    def test_archive_and_restore(self):
+    def test_archive_and_reactivate_keep_the_folder(self):
         archived = self.post("/api/projects/archive", {"key": "0207000"})
-        self.assertEqual(archived.status_code, 200)
-        target = self.vault / matcher.ARCHIVE_DIR / "Acme SO-1 0207000"
-        self.assertEqual(Path(archived.get_json()["moved_to"]), target)
-        self.assertTrue(target.is_dir())
-        self.assertFalse(self.folder.exists())
-        self.assertEqual([p.name for p in matcher.build_projects(self.vault)], [])
-        self.assertEqual(len(self.runs), 1)
-
+        self.assertEqual(archived.status_code, 200, archived.get_json())
+        self.assertTrue(self.folder.is_dir())
+        self.assertFalse((self.vault / matcher.ARCHIVE_DIR).exists())
+        entry = self.state()["archived_projects"]["0207000"]
+        self.assertEqual(entry["rel"], "Acme SO-1 0207000")
+        self.assertTrue(entry["at"])
+        self.assertEqual(self.runs, [])
+        self.assertEqual(self.post("/api/projects/archive", {"key": "0207000"}).status_code, 409)
         self.assertEqual(self.post("/api/projects/archive", {"key": "nope"}).status_code, 404)
 
-        restored = self.post("/api/projects/restore", {"name": "Acme SO-1 0207000"})
+        board = self.client.get("/?layout=board", headers=HOST).get_data(as_text=True)
+        self.assertNotIn('class="card" data-key="0207000"', board)
+        project = self.client.get("/p/0207000", headers=HOST).get_data(as_text=True)
+        self.assertIn('data-action="project-unarchive" data-key="0207000"', project)
+        self.assertIn("Archived on", project)
+        listing = self.client.get("/projects", headers=HOST).get_data(as_text=True)
+        self.assertIn('data-action="project-unarchive" data-key="0207000"', listing)
+
+        reactivated = self.post("/api/projects/unarchive", {"key": "0207000"})
+        self.assertEqual(reactivated.status_code, 200)
+        self.assertEqual(self.state()["archived_projects"], {})
+        self.assertEqual(len(self.runs), 1)
+        self.assertEqual(self.post("/api/projects/unarchive", {"key": "0207000"}).status_code, 404)
+        project = self.client.get("/p/0207000", headers=HOST).get_data(as_text=True)
+        self.assertIn('data-action="project-archive" data-key="0207000"', project)
+
+    def test_legacy_archive_folder_restore(self):
+        legacy = self.vault / matcher.ARCHIVE_DIR / "Old SO-9"
+        legacy.mkdir(parents=True)
+        listing = self.client.get("/projects", headers=HOST).get_data(as_text=True)
+        self.assertIn("Old _Archive folders", listing)
+        restored = self.post("/api/projects/restore", {"name": "Old SO-9"})
         self.assertEqual(restored.status_code, 200)
-        self.assertTrue(self.folder.is_dir())
-        self.assertEqual(
-            [p.name for p in matcher.build_projects(self.vault)], ["Acme SO-1 0207000"]
-        )
+        self.assertTrue((self.vault / "Old SO-9").is_dir())
         self.assertEqual(self.post("/api/projects/restore", {"name": "../x"}).status_code, 400)
 
     def test_delete_and_restore_deleted(self):
@@ -338,6 +356,7 @@ class ProjectsAdminTests(unittest.TestCase):
         for url in (
             "/api/pending/simulate",
             "/api/projects/archive",
+            "/api/projects/unarchive",
             "/api/projects/delete",
             "/api/projects/restore",
             "/api/projects/restore_deleted",

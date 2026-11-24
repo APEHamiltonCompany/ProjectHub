@@ -716,6 +716,7 @@
     if (action === "simulate-pending") { return simulatePending(target); }
     if (action === "manual-create") { return manualCreate(target); }
     if (action === "project-archive") { return archiveProject(target); }
+    if (action === "project-unarchive") { return unarchiveProject(target); }
     if (action === "project-delete") { return deleteProject(target); }
     if (action === "project-restore") { return restoreProject(target); }
     if (action === "project-restore-deleted") { return restoreDeletedProject(target); }
@@ -728,6 +729,26 @@
     if (action === "task-launch") { return launchTask(target); }
     if (action === "project-file-open") { return openProjectFile(target); }
     if (action === "stage-bulk") { return bulkStage(target); }
+    if (action === "archive-selected") { return archiveSelected(target); }
+    if (action === "import-scan") { return importScan(target); }
+    if (action === "import-create") { return importCreate(target); }
+    if (action === "auto-created-dismiss") {
+      return post("/api/auto-created/dismiss", { key: target.getAttribute("data-key") || "" }).then(function () { window.location.reload(); }).catch(fail);
+    }
+    if (action === "team-reassign") { return teamReassignOpen(target); }
+    if (action === "team-reassign-cancel") { document.getElementById("team-reassign-box").hidden = true; return; }
+    if (action === "team-reassign-send") { return teamReassignSend(target); }
+    if (action === "transfer-import") {
+      if (!window.confirm("Copy the previous owner's folder into your vault?")) { return; }
+      busy(target, true);
+      return post("/api/team/transfer/import", { id: target.getAttribute("data-id") }).then(function (data) {
+        toast("Imported to " + data.folder);
+        window.location.reload();
+      }).catch(function (error) { busy(target, false); fail(error); });
+    }
+    if (action === "transfer-ack") {
+      return post("/api/team/transfer/ack", { id: target.getAttribute("data-id"), side: target.getAttribute("data-side") }).then(function () { window.location.reload(); }).catch(fail);
+    }
     if (action === "sync-preview") { return syncPreview(target); }
     if (action === "sync-apply") { return syncApply(target); }
     if (action === "so-add") { return addSo(target); }
@@ -781,6 +802,8 @@
     if (event.target.classList && event.target.classList.contains("sync-pick")) { syncCount(); return; }
     if (event.target.classList && event.target.classList.contains("backup-pick")) { backupCount(); return; }
     if (event.target.classList && event.target.classList.contains("stage-pick")) { countStagePicks(); return; }
+    if (event.target.id === "import-select-all") { importSelectAll(event.target.checked); return; }
+    if (event.target.classList && event.target.classList.contains("import-pick")) { importCount(); return; }
     var cell = event.target.closest(".ts-cell");
     if (!cell) { return; }
     var value = cell.value.trim();
@@ -1010,8 +1033,25 @@
   }
 
   function archiveProject(button) {
-    projectAction(button, "/api/projects/archive", { key: button.getAttribute("data-key") }, function (data) {
-      return "Archived to " + data.moved_to;
+    var name = button.getAttribute("data-name") || button.getAttribute("data-key");
+    if (!window.confirm('Archive "' + name + '"?\n\nThe folder stays where it is. The hub stops reading it and hides it from the boards; emails with its SO/QTE still match it. Use Reactivate to bring it back.')) { return; }
+    busy(button, true);
+    post("/api/projects/archive", { key: button.getAttribute("data-key") }).then(function () {
+      window.location.reload();
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function unarchiveProject(button) {
+    busy(button, true);
+    post("/api/projects/unarchive", { key: button.getAttribute("data-key") }).then(function () {
+      toast("Reactivated: the note is re-read on this refresh");
+      window.setTimeout(pollStatus, 1500);
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
     });
   }
 
@@ -1185,6 +1225,131 @@
       if ((data.failed || []).length) { text += " - failed: " + data.failed.join("; "); }
       toast(text);
       window.setTimeout(function () { window.location.reload(); }, (data.failed || []).length ? 6000 : 800);
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  var teamPick = null;
+
+  function teamReassignOpen(button) {
+    var box = document.getElementById("team-reassign-box");
+    if (!box) { return; }
+    teamPick = { key: button.getAttribute("data-key"), from: button.getAttribute("data-from") };
+    document.getElementById("team-reassign-label").textContent = button.getAttribute("data-label") || teamPick.key;
+    document.getElementById("team-reassign-from").textContent = teamPick.from;
+    box.hidden = false;
+    box.scrollIntoView({ block: "nearest" });
+  }
+
+  function teamReassignSend(button) {
+    if (!teamPick) { return; }
+    var to = document.getElementById("team-reassign-to").value;
+    if (to === teamPick.from) { toast("Pick someone other than the current owner"); return; }
+    busy(button, true);
+    post("/api/team/reassign", { key: teamPick.key, from: teamPick.from, to: to }).then(function () {
+      toast("Reassign request sent to " + to);
+      window.location.reload();
+    }).catch(function (error) { busy(button, false); fail(error); });
+  }
+
+  function archiveSelected(button) {
+    var keys = Array.prototype.map.call(document.querySelectorAll(".stage-pick:checked"), function (box) {
+      return box.getAttribute("data-key");
+    });
+    if (!keys.length) { toast("Tick the projects to archive first"); return; }
+    if (!window.confirm("Archive " + keys.length + " project" + (keys.length === 1 ? "" : "s") + "?\n\nThe folders stay where they are. The hub stops reading them and hides them from the boards; emails with their SO/QTE still match. Use Reactivate to bring one back.")) { return; }
+    busy(button, true);
+    post("/api/projects/archive", { keys: keys }).then(function (data) {
+      var text = "Archived " + data.archived + " project" + (data.archived === 1 ? "" : "s");
+      if ((data.failed || []).length) { text += " - failed: " + data.failed.join("; "); }
+      toast(text);
+      window.setTimeout(function () { window.location.reload(); }, (data.failed || []).length ? 6000 : 800);
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function importCount() {
+    var box = document.getElementById("import-count");
+    var picked = document.querySelectorAll(".import-pick:checked").length;
+    var total = document.querySelectorAll(".import-pick").length;
+    if (box) { box.textContent = picked + " of " + total + " selected"; }
+  }
+
+  function importSelectAll(checked) {
+    Array.prototype.forEach.call(document.querySelectorAll(".import-pick"), function (box) { box.checked = checked; });
+    importCount();
+  }
+
+  function importRender(rows) {
+    var body = document.getElementById("import-rows");
+    var panel = document.getElementById("import-preview");
+    if (!body || !panel) { return; }
+    body.innerHTML = rows.map(function (row) {
+      var numbers = (row.so || []).concat(row.qte || []);
+      if (row.project_no) { numbers.push(row.project_no); }
+      return "<tr><td><input type=\"checkbox\" class=\"import-pick\" data-id=\"" + esc(row.id) + "\"" + (row.checked ? " checked" : "") +
+        " aria-label=\"Create " + esc(row.folder) + "\"></td>" +
+        "<td class=\"nowrap\">" + esc(String(row.received || "").slice(0, 10)) + "</td>" +
+        "<td>" + esc(row.customer) + "</td>" +
+        "<td class=\"nowrap small\">" + esc(numbers.join(", ")) + "</td>" +
+        "<td>" + esc(row.stage) + (row.sheet_status ? "<div class=\"small muted\">sheet: " + esc(row.sheet_status) + "</div>" : "") + "</td>" +
+        "<td class=\"small mono\">" + esc(row.folder) + "</td>" +
+        "<td class=\"small\">" + esc(row.notes) + "</td></tr>";
+    }).join("");
+    panel.hidden = !rows.length;
+    var all = document.getElementById("import-select-all");
+    if (all) { all.checked = false; }
+    importCount();
+  }
+
+  function importPoll(button, done) {
+    var status = document.getElementById("import-status");
+    fetch("/api/import/status").then(function (r) { return r.json(); }).then(function (data) {
+      if (status) { status.textContent = data.error || data.message || ""; }
+      if (data.running) {
+        window.setTimeout(function () { importPoll(button, done); }, 2000);
+        return;
+      }
+      busy(button, false);
+      done(data);
+    }).catch(function () { window.setTimeout(function () { importPoll(button, done); }, 3000); });
+  }
+
+  function importScan(button) {
+    var days = document.getElementById("import-days");
+    var archive = document.getElementById("import-archive");
+    busy(button, true);
+    post("/api/import/scan", { days: days ? days.value : "", include_archive: archive ? archive.checked : false }).then(function () {
+      importPoll(button, function (data) {
+        if (data.error) { fail(new Error(data.error)); return; }
+        importRender(data.rows || []);
+      });
+    }).catch(function (error) {
+      busy(button, false);
+      fail(error);
+    });
+  }
+
+  function importCreate(button) {
+    var ids = Array.prototype.map.call(document.querySelectorAll(".import-pick:checked"), function (box) {
+      return box.getAttribute("data-id");
+    });
+    if (!ids.length) { toast("Tick the projects to create first"); return; }
+    if (!window.confirm("Create " + ids.length + " project folder" + (ids.length === 1 ? "" : "s") + " in the vault?")) { return; }
+    busy(button, true);
+    post("/api/import/create", { ids: ids }).then(function () {
+      importPoll(button, function (data) {
+        if (data.error) { fail(new Error(data.error)); return; }
+        var result = data.result || {};
+        var text = "Created " + (result.created || 0) + " project" + (result.created === 1 ? "" : "s");
+        if ((result.failed || []).length) { text += " - failed: " + result.failed.join("; "); }
+        toast(text);
+        importRender(data.rows || []);
+      });
     }).catch(function (error) {
       busy(button, false);
       fail(error);
@@ -2387,6 +2552,15 @@
         }).catch(fail);
       });
     }
+    var archivedToggle = document.getElementById("archived-toggle");
+    if (archivedToggle) {
+      archivedToggle.addEventListener("click", function () {
+        var next = archivedToggle.getAttribute("aria-pressed") !== "true";
+        post("/api/ui", { show_archived: next }).then(function () {
+          window.location.reload();
+        }).catch(fail);
+      });
+    }
   }
 
   function recalcTimesheet() {
@@ -2495,6 +2669,7 @@
         layout: layout ? layout.value : "board",
         fit: !!(fit && fit.checked),
         auto_reload_pages: !!(autoReload && autoReload.checked),
+        auto_create_projects: !!(document.getElementById("set-auto-create") && document.getElementById("set-auto-create").checked),
         vault: vault ? vault.value : "",
         personal_tasks_path: personal ? personal.value : "",
         time_estimate_template: template ? template.value : "",

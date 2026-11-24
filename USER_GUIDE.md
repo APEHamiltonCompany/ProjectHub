@@ -51,7 +51,6 @@ Then check `tracker\config.yaml`:
 - `templates_root`: the template folder (`R:/APE_AE/TEMPLATES`); `project_files` lists what is copied into new projects.
 - `time_estimate_template`: legacy, used only without `project_files`.
 - `project_folder_layout`: `customer/so` (default) or `flat`; see 1.6a.
-- `auto_create_projects: false`: new assignments wait in the hub for you to click **Create project**.
 - `outlook_com.scope`: `mailbox` (default, every mail folder) or `folders` (only `outlook_com.folders`). `outlook_com.skip_folders` lists folders to leave out, by name (`Graymail`) or path (`Inbox/IT Announcements`); subfolders are skipped too. Email details are cached in `output\outlook_cache.json`, so the first run after setup takes a couple of minutes and later runs take seconds. With `outlook_com.incremental: true` (default) each refresh reads only email received since the last refresh (with a one-day overlap) and keeps the rest from the cache; a full read happens every `outlook_com.full_read_hours` (24) hours, or whenever you change the scope or folders.
 - `ape_sheet.shortcut`: the folder holding the `APE Project Tracking*.url` shortcut (`R:/APE_AE`), or the `.url` file itself. The whole team can use the same shortcut. `ape_sheet.download_hours` (12): how old the downloaded copy can get before the hub downloads a new one. See 2.10.
 - `email_rules`: the email rules from the setup window (see 2.6). Leave it out to use the defaults in `tracker\rules.yaml`.
@@ -131,7 +130,7 @@ Pick one in the sidebar. The hub remembers your choice; you can also add `?layou
   - the team;
   - **Open as tab group**, and an expand button that lists the project's open tasks.
   
-  The **Completion** column is collapsed: it shows only how many projects are complete and a link to **Projects** filtered to Completion (`/projects?stage=Completion`). Completed projects are also left out of the timeline, the task lists, the KPI tiles and the sidebar project list; they stay on the Projects page.
+  The **Completion** column shows its cards like every other column, each with an **Archive** button. Archived projects (2.8) are hidden from the board, the timeline, the task lists, the KPI tiles and the sidebar; **Show archived** adds them back in a separate **Archived** column.
 
   The timeline and the task table sit below the board. On the board, **Fit columns** (top bar) squeezes every column to the window width instead of scrolling sideways; empty stages get narrower columns. The board uses the full window width, and a lower **Zoom** shows more columns at once. With **Fit columns** on, task titles are clamped to two lines - hover a title to read it in full. In dark mode the cards are a lighter grey than the page background.
 - **Timeline**: closest to the old dashboard. KPI tiles, a large Gantt chart, the full task table and a project summary table.
@@ -207,7 +206,7 @@ Only assignment emails with you on the **To:** line count. If you are only on CC
 2. Check the details: customer, SO/QTE, project number, level, team, SharePoint link.
 3. Optional: click **Preview note** to see the note that will be created.
 4. Choose one:
-   - **Create project**: edit the folder name if you like, then click. The hub creates the folder in the vault and a note pre-filled with the frontmatter, team, links, the AE Order Review Checklist from the email and the full workflow checklist. It also copies the template files (see **Project files** in 2.3): first pick a **Test matrix** (L1Carrier, L2L3, or None for repeat parts) and a **Project document** (Compliance or Applications plan) in the dropdowns under the folder name. If a template or a needed number is missing, the project is still created and the toast lists what was not copied. Projects created automatically by the tracker run (`auto_create_projects`) get only the always-copied files plus a task to choose the rest on the project page.
+   - **Create project**: edit the folder name if you like, then click. The hub creates the folder in the vault and a note pre-filled with the frontmatter, team, links, the AE Order Review Checklist from the email and the full workflow checklist. It also copies the template files (see **Project files** in 2.3): first pick a **Test matrix** (L1Carrier, L2L3, or None for repeat parts) and a **Project document** (Compliance or Applications plan) in the dropdowns under the folder name. If a template or a needed number is missing, the project is still created and the toast lists what was not copied. The tracker run never creates projects by itself; every new assignment waits here. If the vault and its backup are both unreachable, the run is cancelled and nothing is changed.
    - **Link to existing folder**: if you already made the folder, pick it. Empty fields in its note are filled in; nothing you wrote is changed.
    - **Dismiss**: not your project, or ignore it. It won't come back.
 5. Due dates for the first steps appear after the automatic refresh that follows. Those steps are: review CPR/SO, ACE questions, and the time estimate (2 business days after assignment).
@@ -288,7 +287,7 @@ Which stage each email moves the project to, and what it starts, in business day
 | Email (subject contains) | Stage | Steps due (only when the kickoff timeline has no date for the step's milestone, see 2.6a) |
 |---|---|---|
 | Project Assignment (you on To:) | Pre-Kickoff | Review CPR/SO, ACE questions, time estimate + RMT: +2 |
-| Kickoff | Pre-Fabrication | Kickoff meeting: +0 |
+| Kickoff / Kick off, or the word **KO** when the subject also has an SO, QTE or 020 number ("SO-268679 - Pfizer KO Schedule") | Pre-Fabrication | Kickoff meeting: +0 |
 | Internal design review, Internal review, DR internal | Pre-Fabrication | Wiring diagram, test matrix: +1 |
 | Design review | Pre-Fabrication | Design review: +0; finish Apps Plan: +5 |
 | WO firm / Work order firm | Fabrication | Parts required for testing: +5 |
@@ -301,7 +300,7 @@ Matching ignores case and spacing. Replies, forwards and automatic replies don't
 Change the keywords or stage of each rule in `setup.cmd` → **4. Email rules** (comma-separated keywords). They are saved as `email_rules` in `tracker\config.yaml`, separately for each user; unchanged rules are not saved, so the defaults in `tracker\rules.yaml` apply.
 
 ### 2.6a PM milestones from the kickoff schedule
-The newest kickoff email's "Project timeline" table sets the deadlines. Only these rows become milestones, each due on the row's finish date:
+The PM's timeline tables set the deadlines. Only these rows become milestones, each due on the row's finish date:
 
 | Milestone | Steps under it |
 |---|---|
@@ -312,6 +311,12 @@ The newest kickoff email's "Project timeline" table sets the deadlines. Only the
 | AE Pack Up (also "Pack Up", "AE Disassembly & Packing") | Pack up |
 | AutoE Close Out | Closeout documents, reply to PM closeout email |
 
+- **Newest table wins, milestone by milestone.** Tables are read from the kickoff email, A&T notifications, other emails about the project and PM replies in the thread. For a reply, only the new text above the quoted thread counts. A trimmed table (for example an A&T table with only Testing, Pack Up and Close Out) updates only the milestones it lists; the rest keep their earlier date.
+- **Only the PM's tables count**: the sender of the project's kickoff email, plus the PM named on the team tracker sheet. A teammate replying with an old table does not move dates. With no PM known, only original emails count, not replies.
+- **Wrong-table check:** if none of the SO/QTE/020 numbers in the table's rows matches the subject or the project, the whole table is ignored and no dates change. The run log notes it as `timeline skipped: <date> <subject> (subject/project ..., table ...)`. One matching number is enough, since one project often has several SOs. Customer names aren't compared ("AstraZeneca" subject with "Medimmune" rows is fine). Tables whose rows carry no numbers are accepted.
+- In an accepted table, individual rows naming a different job's number are ignored.
+- The email's project, for both dates and stage, comes from the first project number in its subject, so "Amazon SO-283465 … (Previously SO-268726)" counts only for SO-283465.
+- The project page shows where each milestone date came from, e.g. `2026-12-11 (A&T 11/16)`, `(KO 9/28)` or `(Reply 11/13)`. Steps under it use the same date.
 - Every step under a milestone is due on that milestone's **finish** date. The trigger emails in 2.6 still move the project's stage, but they only date a step when its milestone has no date (no readable timeline).
 - Pre-Kickoff steps (assignment +2) and Completion steps have no milestone.
 - In the note and on the project page, steps are indented under their milestone. Ticking a milestone ticks its open steps; ticking or marking N/A the last open step ticks the milestone; reopening a step reopens the milestone.
@@ -342,7 +347,8 @@ Open **Projects** in the sidebar, or `http://localhost:8765/projects`. It lists 
 - Every project folder gets a note: the tracker run creates a minimal one (stage Unknown, no workflow tasks) for any folder without a `.md` file, and the hub creates one when you set a stage or add a task. Existing notes are never overwritten.
 - **Create project manually** (top of the page) makes a project without waiting for an email. Fill in Customer (required), SO numbers, QTE numbers, Project # (7 digits, optional), Description, Level and Folder name; separate several SO or QTE numbers with commas or spaces. Leave Folder name blank and the hub names the folder from the customer and the first SO (or QTE, or the project number): `Customer/SO-######` in the `customer/so` layout, `Customer SO-###### <project #>` in the `flat` layout. You can type either form. It creates the folder, the note and the time-estimate sheet from the template, then opens the project page. Add links (SharePoint, email, etc.) on the project page afterwards.
 - **Open folder** opens the project folder in Explorer.
-- **Archive** moves the folder into `_Archive` inside the vault, keeping the customer level (`_Archive\<Customer>\SO-######`); an emptied customer folder is removed. Archived projects drop out of the board, the timeline and the project list. The **Archived** section lists them with **Restore** (moves the folder back) and **Open folder**.
+- **Archive** is manual only (nothing is archived automatically and there is no "archive all"). The button is on Completion cards on the Board, on every project page and on each row here. The folder is **never moved**: the hub records it in `state.json` (`archived_projects`), stops reading its note from R: (the tracker reuses the project's last snapshot entry), and hides it from the board, the timeline, the task lists, the KPI tiles and the sidebar. Its SO/QTE numbers still match emails; the project page and the Archived list show how many new emails arrived since it was archived. **Show archived** (next to **Fit columns** on the Board) adds an **Archived** column. **Reactivate** (Board card, project page, or the **Archived** section here) removes it from the list and starts a refresh so the note is read again.
+- **Old _Archive folders**: folders moved to `_Archive` by an older version are listed in their own section (only when there are any) with **Restore** (moves the folder back) and **Open folder**.
 - **Delete** asks a simple OK/Cancel confirm. The folder is then moved to `backups\deleted_projects\<YYYYmmdd_HHMMSS>_<folder name>`, never erased. Its saved links are removed and any pending assignment for it is marked deleted. Nested projects are backed up as `<stamp>_<Customer> - SO-######`. The **Deleted** section lists these backups newest first, with **Restore** (moves the folder back to its original place, recreating the customer folder if needed) and **Open folder**.
 - If a file in the folder is open (Excel, Word, a PDF viewer), Windows can refuse the move. Close it and try again; the hub says "Could not move the folder (is a file open?)".
 - Restore never overwrites: if a folder with that name is already in the vault, you get a message instead.

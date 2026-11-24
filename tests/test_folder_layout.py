@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -199,12 +200,16 @@ class HubNestedTests(unittest.TestCase):
         headers = dict(HOST, **{"X-Hub-Token": self.token, "Origin": ORIGIN})
         return self.client.post(url, json=payload, headers=headers)
 
-    def test_archive_and_restore_keep_customer_level(self):
+    def test_archive_records_customer_level_path_and_legacy_restore(self):
         response = self.post("/api/projects/archive", {"key": "0207000"})
         self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["folder"], "Acme/SO-111111")
+        self.assertTrue(self.folder.is_dir())
+        self.assertEqual(self.post("/api/projects/unarchive", {"key": "0207000"}).status_code, 200)
         target = self.vault / matcher.ARCHIVE_DIR / "Acme" / "SO-111111"
-        self.assertTrue(target.is_dir())
-        self.assertFalse((self.vault / "Acme").exists(), "empty customer folder should be removed")
+        target.parent.mkdir(parents=True)
+        shutil.move(str(self.folder), str(target))
+        (self.vault / "Acme").rmdir()
         page = self.client.get("/projects", headers=HOST).get_data(as_text=True)
         self.assertIn('data-name="Acme/SO-111111"', page)
         self.assertIn('data-layout="customer/so"', page)

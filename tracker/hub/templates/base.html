@@ -19,6 +19,7 @@
       <a class="nav-item{% if request.endpoint == 'projects_page' %} active{% endif %}" href="{{ url_for('projects_page') }}">Projects</a>
       <a class="nav-item{% if request.endpoint == 'timesheet_page' %} active{% endif %}" href="{{ url_for('timesheet_page') }}">Timesheet</a>
       <a class="nav-item{% if request.endpoint == 'monday_page' %} active{% endif %}" href="{{ url_for('monday_page') }}">Monday update</a>
+      {% if team_nav %}<a class="nav-item{% if request.endpoint == 'team_page' %} active{% endif %}" href="{{ url_for('team_page') }}">Team</a>{% endif %}
       <a class="nav-item{% if request.endpoint == 'settings_page' %} active{% endif %}" href="{{ url_for('settings_page') }}">Settings</a>
     </nav>
     <div class="side-label">Projects</div>
@@ -60,6 +61,7 @@
         </label>
         {% if request.endpoint == 'dashboard' and layout == 'board' %}
         <button type="button" class="btn small{% if ui.fit %} active{% endif %}" id="fit-toggle" aria-pressed="{{ 'true' if ui.fit else 'false' }}">Fit columns</button>
+        <button type="button" class="btn small{% if ui.show_archived %} active{% endif %}" id="archived-toggle" aria-pressed="{{ 'true' if ui.show_archived else 'false' }}">Show archived{% if archived_count %} ({{ archived_count }}){% endif %}</button>
         {% endif %}
         <button type="button" class="btn primary" id="new-task-open">+ New task</button>
       </div>

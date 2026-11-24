@@ -194,6 +194,22 @@ class MissingConfigTests(unittest.TestCase):
             missing = Path(tmp) / "nope.yaml"
             self.assertEqual(tracker_mod.main(["--config", str(missing)]), 2)
 
+    def test_tracker_cancels_when_vault_unreachable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state.json"
+            snapshot = Path(tmp) / "snapshot.json"
+            config = Path(tmp) / "config.yaml"
+            config.write_text(yaml.safe_dump({
+                "vault": str(Path(tmp) / "gone" / "My Projects"),
+                "state_path": str(state),
+                "snapshot_path": str(snapshot),
+                "log_path": str(Path(tmp) / "last_run.log"),
+            }), encoding="utf-8")
+            self.assertEqual(tracker_mod.main(["--config", str(config), "--no-dashboard"]), 3)
+            self.assertFalse(state.exists())
+            self.assertFalse(snapshot.exists())
+            self.assertFalse((Path(tmp) / "gone").exists())
+
     def test_hub_main_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "nope.yaml"

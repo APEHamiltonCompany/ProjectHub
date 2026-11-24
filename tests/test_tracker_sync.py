@@ -351,12 +351,29 @@ class HubSyncTests(unittest.TestCase):
         self.assertEqual(self.post("/api/tracker-sync/apply", {"items": []}).status_code, 400)
         self.assertEqual(self.post("/api/tracker-sync/apply", {"items": [{"key": "SO-100001", "stage": "Nope"}]}).status_code, 400)
 
-    def test_completion_collapsed_on_board(self):
-        page = self.app.test_client().get("/?layout=board", headers=HOST).get_data(as_text=True)
-        self.assertIn("is-collapsed", page)
-        self.assertIn("1 completed project: see Projects", page)
+    def test_completion_shown_on_board_and_archived_hidden_until_toggled(self):
+        client = self.app.test_client()
+        page = client.get("/?layout=board", headers=HOST).get_data(as_text=True)
+        self.assertNotIn("is-collapsed", page)
+        self.assertIn("Task for SO-100003", page)
+        self.assertIn('data-action="project-archive" data-key="SO-100003"', page)
+        self.assertNotIn('data-action="project-archive" data-key="SO-100002"', page)
+        self.assertNotIn("board-col-archived", page)
+
+        state = {"pending": {}, "archived_projects": {"SO-100003": {"rel": "Acme/SO-100003", "at": "2026-11-20T10:00:00"}}}
+        (self.root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        page = client.get("/?layout=board", headers=HOST).get_data(as_text=True)
         self.assertNotIn("Task for SO-100003", page)
         self.assertIn("Task for SO-100002", page)
+        self.assertIn("Show archived (1)", page)
+        self.assertNotIn("board-col-archived", page)
+
+        state["ui"] = {"show_archived": True}
+        (self.root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        page = client.get("/?layout=board", headers=HOST).get_data(as_text=True)
+        self.assertIn("board-col-archived", page)
+        self.assertIn('data-action="project-unarchive" data-key="SO-100003"', page)
+        self.assertIn('<span class="badge archived"', page)
         page = self.app.test_client().get("/projects?stage=Completion", headers=HOST).get_data(as_text=True)
         self.assertIn('<option value="Completion" selected>', page)
         self.assertIn('data-action="sync-preview"', page)

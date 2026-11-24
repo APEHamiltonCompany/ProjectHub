@@ -1,0 +1,45 @@
+{% if team %}
+{% set incoming = team.transfers.incoming|rejectattr("replied")|list %}
+{% set outgoing = team.transfers.outgoing|rejectattr("replied")|list %}
+{% if incoming or outgoing %}
+<section class="pending" id="transfers">
+  <div class="pending-head"><span class="badge">Project transfers</span><h3>{{ incoming|length + outgoing|length }} waiting</h3></div>
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead><tr><th>Project</th><th>Transfer</th><th>Requested</th><th></th></tr></thead>
+      <tbody>
+      {% for r in incoming %}
+        <tr>
+          <td>{{ r.customer }} {{ (r.so + r.qte)|join(", ") }}</td>
+          <td class="small">Transfer in from {{ r.from }} (by {{ r.by }})<br><span class="muted">{{ r.from_folder }}</span></td>
+          <td class="nowrap small">{{ (r.created or "")[:16]|replace("T", " ") }}</td>
+          <td class="nowrap">
+            <button type="button" class="btn small primary" data-action="transfer-import" data-id="{{ r.id }}"{% if not team.ok %} disabled title="{{ team.why }}"{% endif %}>Import folder</button>
+            <button type="button" class="btn small" data-action="transfer-ack" data-side="incoming" data-id="{{ r.id }}">Not mine</button>
+          </td>
+        </tr>
+      {% endfor %}
+      {% for r in outgoing %}
+        <tr>
+          <td>{{ r.customer }} {{ (r.so + r.qte)|join(", ") }}</td>
+          <td class="small">Transferred to {{ r.to }} (by {{ r.by }}) &middot; {{ "imported" if r.state == "imported" else "not imported yet" }}<br><span class="muted">Your folder stays; archive it yourself when the project is complete.</span></td>
+          <td class="nowrap small">{{ (r.created or "")[:16]|replace("T", " ") }}</td>
+          <td class="nowrap"><button type="button" class="btn small" data-action="transfer-ack" data-side="outgoing" data-id="{{ r.id }}">OK</button></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not team.ok %}<p class="small muted">{{ team.why }}</p>{% endif %}
+</section>
+{% endif %}
+{% endif %}
+{% if owner_flags %}
+<section class="pending" id="owner-flags">
+  <div class="pending-head"><span class="badge">Owner mismatch</span><h3>{{ owner_flags|length }} project{{ "" if owner_flags|length == 1 else "s" }}</h3></div>
+  <p class="small muted">The schedule or the APE sheet names someone else. Nothing moves by itself: ask the manager to reassign, or fix the schedule or sheet.</p>
+  <ul class="small">
+  {% for p in owner_flags %}<li><a href="{{ url_for('project_page', key=p.key) }}">{{ p.name }}</a>: {{ p.owner_flags|join("; ") }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}

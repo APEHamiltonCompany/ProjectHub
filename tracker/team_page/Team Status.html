@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>APE Team Status</title>
+<style>
+  body { font: 14px/1.4 "Segoe UI", Arial, sans-serif; margin: 20px; color: #1d2733; background: #f6f8fa; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h3 { margin: 18px 0 6px; font-size: 15px; }
+  .note { color: #5b6773; font-size: 12px; margin-bottom: 12px; }
+  .tv-filters { margin: 10px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .tv-filters select, .tv-filters input[type=search] { padding: 4px 6px; }
+  .tv-gantt { background: #fff; border: 1px solid #d6dde4; border-radius: 6px; padding: 6px; }
+  .tv-row { display: flex; align-items: center; border-bottom: 1px solid #eef1f4; min-height: 24px; }
+  .tv-head { font-weight: 600; height: 22px; }
+  .tv-label { width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 8px; font-size: 12px; }
+  .tv-track { position: relative; flex: 1; height: 18px; }
+  .tv-tick { position: absolute; font-size: 10px; color: #5b6773; border-left: 1px solid #d6dde4; padding-left: 2px; height: 18px; }
+  .tv-bar { position: absolute; top: 4px; height: 10px; background: #3f7fc1; border-radius: 3px; }
+  .tv-bar.tv-late { background: #c44; }
+  .tv-today { position: absolute; top: 0; bottom: 0; border-left: 2px solid #e89b1c; }
+  .tv-muted { color: #5b6773; }
+  .tv-flag { background: #fde8c8; border-radius: 3px; padding: 0 4px; font-size: 11px; }
+  .tv-table { border-collapse: collapse; background: #fff; }
+  .tv-table td, .tv-table th { border: 1px solid #d6dde4; padding: 3px 8px; text-align: left; }
+  #problems { color: #a33; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>APE Team Status</h1>
+<div class="note">Read-only. Each engineer's hub updates its part when it refreshes; the "Data as of" column shows how fresh each part is. Reload the page (F5) for the latest.</div>
+<div id="problems"></div>
+<div id="team"></div>
+<script src="team.js"></script>
+<script src="team_view.js"></script>
+<script>
+(function () {
+  var roster = window.TEAM_ROSTER || [];
+  var problems = document.getElementById("problems");
+  if (!window.TeamView) { problems.textContent = "team_view.js is missing next to this page."; return; }
+  if (!roster.length) { problems.textContent = "No one has published yet (team.js is missing or empty)."; }
+  window.TEAM_STATUS = window.TEAM_STATUS || {};
+  var left = roster.length;
+  function done() {
+    if (--left > 0) return;
+    var statuses = roster.map(function (m) {
+      var s = window.TEAM_STATUS[m.name];
+      if (!s) return { name: m.name, role: m.role || "", projects: [], missing: true };
+      s.role = m.role || "";
+      return s;
+    });
+    window.TeamView.render(document.getElementById("team"), { statuses: statuses, today: "" });
+  }
+  if (!roster.length) { left = 1; done(); return; }
+  roster.forEach(function (m) {
+    var tag = document.createElement("script");
+    tag.src = encodeURI((m.folder || m.name) + "/status.js") + "?t=" + Date.now();
+    tag.onload = done;
+    tag.onerror = function () { problems.textContent += " Could not load " + (m.folder || m.name) + "/status.js."; done(); };
+    document.body.appendChild(tag);
+  });
+})();
+</script>
+</body>
+</html>

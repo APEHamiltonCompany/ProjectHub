@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Team - Project Hub{% endblock %}
+{% block page_title %}Team{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Team</h2>
+    <span class="small muted">{{ statuses|length }} engineer{{ "" if statuses|length == 1 else "s" }} &middot; {{ rows|length }} projects &middot; view only{% if info.can_reassign %} (you can reassign){% endif %}</span>
+  </div>
+  {% if not info.ok %}<p class="small">Team data is unavailable: {{ info.why }}. Reassigning waits until R: is back.</p>{% endif %}
+  {% if info.can_reassign %}
+  <div class="small" id="team-reassign-box" hidden>
+    Reassign <b id="team-reassign-label"></b> from <span id="team-reassign-from"></span> to
+    <select id="team-reassign-to">{% for m in info.roster %}<option value="{{ m.name }}">{{ m.name }}</option>{% endfor %}</select>
+    <button type="button" class="btn small primary" data-action="team-reassign-send">Send</button>
+    <button type="button" class="btn small" data-action="team-reassign-cancel">Cancel</button>
+    <span class="muted">Also change the person in MS Project; the hub never writes to the schedule.</span>
+  </div>
+  {% endif %}
+  <div id="team-view"></div>
+</section>
+{% if requests %}
+<section class="panel">
+  <div class="panel-head"><h2>Reassignments</h2></div>
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead><tr><th>Project</th><th>From</th><th>To</th><th>By</th><th>Requested</th><th>State</th></tr></thead>
+      <tbody>
+      {% for r in requests|reverse %}
+        <tr><td>{{ r.customer }} {{ (r.so + r.qte)|join(", ") }}</td><td>{{ r.from }}</td><td>{{ r.to }}</td><td>{{ r.by }}</td>
+        <td class="nowrap small">{{ (r.created or "")[:16]|replace("T", " ") }}</td><td>{{ r.state }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+<script src="{{ url_for('team_view_js') }}"></script>
+<script>
+window.TeamView.render(document.getElementById("team-view"), {
+  statuses: {{ statuses|tojson }},
+  today: {{ today.isoformat()|tojson }},
+  reassign: {{ info.can_reassign|tojson }}
+});
+</script>
+{% endblock %}

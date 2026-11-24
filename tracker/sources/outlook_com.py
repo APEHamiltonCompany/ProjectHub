@@ -280,6 +280,99 @@ def collect(config: dict, since_days: Optional[int] = None) -> list[Email]:
     return emails
 
 
+SKIPPED_FOLDER_NAMES = {"deleted items", "junk email", "drafts", "outbox", "conversation history", "sync issues"}
+PUBLIC_FOLDER_STORE = 2
+
+
+def _store_folders(root, prefix: str, skip: list[str]) -> list[tuple[str, object, bool]]:
+    """Mail folders of an extra store (Online Archive, PST), skipping deleted/junk/drafts by name."""
+    found: list[tuple[str, object, bool]] = []
+
+    def walk(folder, path: str) -> None:
+        try:
+            children = list(folder.Folders)
+        except Exception:
+            return
+        for child in children:
+            try:
+                name = str(child.Name)
+                is_mail = child.DefaultItemType == MAIL_FOLDER_TYPE
+            except Exception:
+                continue
+            child_path = path + "/" + name
+            if not is_mail or name.lower() in SKIPPED_FOLDER_NAMES or _skipped(child_path, name, skip):
+                continue
+            found.append((child_path, child, name.lower().startswith("sent")))
+            walk(child, child_path)
+
+    walk(root, prefix)
+    return found
+
+
+def collect_headers(config: dict, since_days: int, include_archive: bool = False, progress=None) -> list[Email]:
+    """Subject, To, sender and date of every mail newer than since_days, without bodies, through the fast Table
+    API. For the one-time project import: reads further back than days_back and never touches outlook_cache."""
+    settings = config.get("outlook_com") or {}
+    namespace = _namespace()
+    skip = [str(item) for item in settings.get("skip_folders") or [] if str(item).strip()]
+    targets = mailbox_folders(namespace, skip)
+    if include_archive:
+        try:
+            default_store = str(namespace.GetDefaultFolder(FOLDER_INBOX).Store.StoreID)
+        except Exception:
+            default_store = ""
+        for store in list(namespace.Stores):
+            try:
+                if str(store.StoreID) == default_store or store.ExchangeStoreType == PUBLIC_FOLDER_STORE:
+                    continue
+                targets.extend(_store_folders(store.GetRootFolder(), str(store.DisplayName), skip))
+            except Exception as exc:
+                print("outlook: skipped a store (%s)" % exc)
+    cutoff = datetime.now() - timedelta(days=int(since_days))
+    seen: dict[str, Email] = {}
+    for number, (folder_name, folder, sent) in enumerate(targets):
+        if progress is not None:
+            progress(number, len(targets), folder_name)
+        field = "SentOn" if sent else "ReceivedTime"
+        try:
+            table = folder.GetTable("[%s] >= '%s'" % (field, _restrict_date(cutoff)))
+            for column in ("Subject", "To", "SenderName", field):
+                try:
+                    table.Columns.Add(column)
+                except Exception:
+                    pass
+            while not table.EndOfTable:
+                row = table.GetNextRow()
+                if not str(row["MessageClass"] or "").upper().startswith("IPM.NOTE"):
+                    continue
+                when = _local(row[field])
+                entry_id = str(row["EntryID"] or "")
+                if when is None or not entry_id or entry_id in seen:
+                    continue
+                seen[entry_id] = Email(
+                    message_id="outlook:" + entry_id,
+                    subject=str(row["Subject"] or ""),
+                    sender=str(row["SenderName"] or ""),
+                    to=str(row["To"] or ""),
+                    cc="",
+                    date=when,
+                    body_text="",
+                    source_path="outlook:" + folder_name,
+                    entry_id=entry_id,
+                )
+        except Exception as exc:
+            print("outlook: could not read %s (%s)" % (folder_name, exc))
+    return list(seen.values())
+
+
+def item_body(entry_id: str) -> str:
+    """Body text of one mail item (used for the few assignment emails the import creates projects from)."""
+    try:
+        return str(_namespace().GetItemFromID(str(entry_id)).Body or "")
+    except Exception:
+        return ""
+
+
 INCREMENTAL_OVERLAP = timedelta(days=1)
 
 

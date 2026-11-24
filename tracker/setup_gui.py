@@ -109,7 +109,7 @@ def form_from_config(cfg: dict) -> dict:
         "ape_url": str(ape.get("url") or ""),
         "ms_project_path": str((cfg.get("ms_project") or {}).get("path") or ""),
         "exclude_folders": _csv(cfg.get("exclude_folders")),
-        "auto_create_projects": bool(cfg.get("auto_create_projects", True)),
+        "auto_create_projects": bool(cfg.get("auto_create_projects", False)),
         "due_soon_days": str(cfg.get("due_soon_days") if cfg.get("due_soon_days") is not None else 3),
         "hub_port": str(hub.get("port") or 8765),
         "refresh_minutes": str(hub.get("refresh_minutes") if hub.get("refresh_minutes") is not None else 15),
@@ -267,7 +267,13 @@ def build_config(form: dict, base: dict) -> tuple[dict, list[str], list[str]]:
     cfg["ms_project"] = schedule
 
     cfg["exclude_folders"] = _split(form["exclude_folders"])
-    cfg["auto_create_projects"] = bool(form["auto_create_projects"])
+    auto_create = bool(form.get("auto_create_projects", cfg.get("auto_create_projects", False)))
+    if auto_create:
+        cfg["auto_create_projects"] = True
+        if not name or not me["email"]:
+            errors.append("Create projects automatically needs your name and work email: only assignment emails with you on the To: line create a project.")
+    else:
+        cfg.pop("auto_create_projects", None)
     due = _int(form["due_soon_days"], "Due soon days", errors, 0, 365)
     if due is not None:
         cfg["due_soon_days"] = due
@@ -424,8 +430,8 @@ def run_ui() -> None:
             variables[key].set(Path(value).as_posix())
 
     you = section("1. About you")
-    row = entry(you, 0, "name", "Your name", "Exactly as it appears in PM kickoff schedules.")
-    row = entry(you, row, "email", "Work email")
+    row = entry(you, 0, "name", "Your name", "Exactly as it appears in PM kickoff schedules and on email To: lines.")
+    row = entry(you, row, "email", "Work email", "Assignment emails count only when this address or your name is on the To: line (not CC).")
     entry(you, row, "initials", "Initials", "As used in the APE Project Tracking sheet's assignment columns.")
 
     folders = section("2. Project files")
@@ -444,6 +450,11 @@ def run_ui() -> None:
         "Existing folders in either layout are always recognised.",
     )
     row += 2
+    row = check(
+        folders, row, "auto_create_projects", "Create project folders automatically from assignment emails",
+        "Needs your name and work email above. Off = new assignments wait on the hub Dashboard for Create.\n"
+        "Never runs when the vault is unreachable, when working from the backup, or when the scan finds far fewer folders.",
+    )
     row = entry(
         folders, row, "personal_tasks_path", "Personal tasks file",
         "Markdown file for non-project tasks; created if missing. Blank = <vault>/My Tasks.md.", "md",
@@ -583,10 +594,6 @@ def run_ui() -> None:
 
     toggle.configure(command=toggle_advanced)
     row = entry(advanced, 0, "exclude_folders", "Excluded folders", "Comma-separated vault subfolders that are not projects.")
-    row = check(
-        advanced, row, "auto_create_projects", "Create project folders automatically from assignment emails",
-        "Off: new assignments wait in the hub for you to click Create project.",
-    )
     row = entry(advanced, row, "due_soon_days", "Due soon (days)", "Tracker summary threshold.")
     row = entry(advanced, row, "hub_port", "Hub port", "The hub runs at http://localhost:<port>.")
     row = entry(advanced, row, "refresh_minutes", "Hub refresh (minutes)", "How often the hub re-reads email. 0 = never.")
@@ -637,6 +644,7 @@ def run_ui() -> None:
         base.update(cfg)
         setup_wizard.ensure_files(cfg)
         answers = {key: cfg.get(key) for key in setup_wizard.OVERLAY_KEYS}
+        answers["auto_create_projects"] = bool(cfg.get("auto_create_projects"))
         removed = setup_wizard.clean_settings(CONFIG_PATH, answers)
         write_log("Saved %s\n" % CONFIG_PATH)
         if backup:

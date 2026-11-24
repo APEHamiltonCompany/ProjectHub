@@ -29,7 +29,6 @@ NUMBERING_RE = re.compile(r"^\d+\.\s*")
 TIMELINE_RE = re.compile(r"^\s*Project\s+timeline\s*:?\s*$", re.I)
 DURATION_RE = re.compile(r"^\d+(?:\.\d+)?\s+days?\??$")
 TASK_NAME_RE = re.compile(r"^\s*Task\s+Name\s*$", re.I)
-SUMMARY_ID_RE = re.compile(r"(?:SO|QTE)-?\d{5,6}|Kick", re.I)
 SCHEDULE_DATE_RE = re.compile(r"^(?:(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+)?(\d{1,2})/(\d{1,2})/(\d{2,4})$")
 SO_PREFIX_RE = re.compile(r"^.+?\s-\s(?:SO|QTE)-\d{6}(?:\s*[,;&/]\s*(?:and\s+)?(?:SO|QTE)-\d{6})*\s+")
 
@@ -209,9 +208,38 @@ def parse_schedule(body: str, me_name: str = "") -> list[dict]:
             }
         )
         position = cursor
-    if len(result) > 1 and not SUMMARY_ID_RE.search(result[0]["name"]):
+    if len(result) > 1 and _is_summary_row(result[0], result[1:]):
         result = result[1:]
     return result
+
+
+def _is_summary_row(first: dict, rest: list[dict]) -> bool:
+    """MS Project's project summary row spans every other row; a trimmed table that starts at a real task keeps it."""
+    if len(rest) < 2:
+        return False
+    return first["start"] <= min(row["start"] for row in rest) and first["finish"] >= max(row["finish"] for row in rest)
+
+
+QUOTE_START_RES = (
+    re.compile(r"^\s*_{8,}\s*$"),
+    re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}", re.I),
+    re.compile(r"^\s*On .{6,200} wrote:\s*$", re.I),
+)
+QUOTE_FROM_RE = re.compile(r"^\s*From:\s*\S", re.I)
+QUOTE_HEADER_RE = re.compile(r"^\s*(Sent|Date|To|Subject):", re.I)
+
+
+def own_text(body: str) -> str:
+    """The part of an email above the first quoted message (Outlook "From:/Sent:" header, separator line or "On ... wrote:")."""
+    lines = clean(body).split("\n")
+    for index, line in enumerate(lines):
+        if any(pattern.match(line) for pattern in QUOTE_START_RES):
+            return "\n".join(lines[:index])
+        if QUOTE_FROM_RE.match(line):
+            following = [item for item in lines[index + 1:index + 6] if item.strip()][:3]
+            if any(QUOTE_HEADER_RE.match(item) for item in following):
+                return "\n".join(lines[:index])
+    return "\n".join(lines)
 
 
 def parse_kickoff_body(body: str) -> dict:

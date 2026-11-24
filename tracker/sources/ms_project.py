@@ -133,23 +133,33 @@ def read_mspdi(path) -> dict:
 
 
 def find_java_home(cfg: dict | None = None) -> str:
-    """cfg ms_project.java_home, JAVA_HOME, %LOCALAPPDATA%/ProjectHub/jre/*, then java on PATH."""
-    for candidate in (_conf(cfg).get("java_home"), os.environ.get("JAVA_HOME")):
-        text = str(candidate or "").strip()
-        if text and (Path(text) / "bin" / "java.exe").is_file():
-            return text
+    """cfg ms_project.java_home, JAVA_HOME, %LOCALAPPDATA%/ProjectHub/jre/*, then java on PATH; first full Java 11+."""
+    candidates = [_conf(cfg).get("java_home"), os.environ.get("JAVA_HOME")]
     local = str(os.environ.get("LOCALAPPDATA") or "").strip()
     if local:
         try:
-            for entry in sorted((Path(local) / "ProjectHub" / "jre").iterdir()):
-                if (entry / "bin" / "java.exe").is_file():
-                    return str(entry)
+            candidates += sorted((Path(local) / "ProjectHub" / "jre").iterdir(), reverse=True)
         except OSError:
             pass
     found = shutil.which("java")
     if found:
-        return str(Path(found).resolve().parent.parent)
+        candidates.append(Path(found).resolve().parent.parent)
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text and _usable_java(Path(text)):
+            return text
     return ""
+
+
+def _usable_java(home: Path) -> bool:
+    if not (home / "bin" / "server" / "jvm.dll").is_file() and not (home / "lib" / "server" / "libjvm.so").is_file():
+        return False
+    try:
+        release = (home / "release").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    match = re.search(r'JAVA_VERSION="(?:1\.)?(\d+)', release)
+    return bool(match) and int(match.group(1)) >= 11
 
 
 def read_mpxj(path, java_home: str = "") -> dict:

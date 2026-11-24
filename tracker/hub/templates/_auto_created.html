@@ -1,0 +1,34 @@
+{% if auto_create.blocked %}
+<section class="pending">
+  <div class="pending-head"><span class="badge">Automatic project creation paused</span></div>
+  <p class="small">The last run did not create projects: {{ auto_create.blocked }}. New assignments wait below instead. It switches back on by itself when the vault scan looks normal again.</p>
+</section>
+{% endif %}
+{% if auto_created %}
+<section class="pending" id="auto-created">
+  <div class="pending-head">
+    <span class="badge">Created automatically</span>
+    <h3>{{ auto_created|length }} new project{{ "" if auto_created|length == 1 else "s" }}</h3>
+    <button type="button" class="btn small" data-action="auto-created-dismiss" data-key="">Dismiss all</button>
+  </div>
+  <p class="small muted">Made from assignment emails addressed to you. If one is wrong, Delete moves its folder to the deleted-projects backup.</p>
+  <div class="table-wrap">
+    <table class="projects-table">
+      <thead><tr><th>Project</th><th>Email</th><th>Created</th><th></th></tr></thead>
+      <tbody>
+      {% for entry in auto_created %}
+        <tr>
+          <td><a href="{{ url_for('project_page', key=entry.key) }}">{{ entry.folder }}</a></td>
+          <td class="small">{{ entry.subject }}</td>
+          <td class="nowrap small">{{ (entry.at or "")[:16]|replace("T", " ") }}</td>
+          <td class="nowrap">
+            <button type="button" class="btn small" data-action="auto-created-dismiss" data-key="{{ entry.key }}">OK</button>
+            <button type="button" class="btn small danger" data-action="project-delete" data-key="{{ entry.key }}" data-name="{{ entry.folder }}">Delete</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}

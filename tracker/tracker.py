@@ -18,6 +18,7 @@ from tracker import projects as projects_mod
 from tracker import rules as rules_mod
 from tracker import settings as settings_mod
 from tracker import state as state_mod
+from tracker import team
 from tracker.models import Email, Project, Task
 from tracker.sources import collect_all
 from tracker.sources import ape_sheet
@@ -55,32 +56,6 @@ def yaml_list(values: list[str]) -> str:
 def task_prefix(project: Project) -> str:
     """Task ids start with this. id_prefix (frontmatter) keeps the ids stable when an SO is added to a QTE project."""
     return project.id_prefix or projects_mod.id_prefix_for(project.project_no, project.key)
-
-
-def create_project(cfg: dict, email: Email, parsed: dict, stage: str, dry_run: bool) -> Project | None:
-    body_parsed = extract.parse_assignment_body(email.body_text)
-    entry = projects_mod.pending_entry(email, parsed, body_parsed, matcher.folder_layout(cfg))
-    try:
-        info = projects_mod.create_from_pending(cfg, entry, dry_run=dry_run)
-    except ValueError as exc:
-        out("  cannot create project: %s" % exc)
-        return None
-    if dry_run:
-        out("  would create project folder: %s" % info["folder"])
-        out("  would create note: %s" % info["note_path"])
-    else:
-        out("  created project folder: %s" % info["folder"])
-    return Project(
-        folder=info["folder"],
-        name=Path(info["folder"]).name,
-        note_path=info["note_path"],
-        customer=parsed["customer"],
-        project_no=parsed["project_no"],
-        so=list(parsed["so"]),
-        qte=list(parsed["qte"]),
-        level=parsed["level"],
-        stage=stage,
-    )
 
 
 def ensure_dashboard_note(cfg: dict, dry_run: bool) -> None:
@@ -149,6 +124,118 @@ def prune_pending(pending: dict, projects: list[Project]) -> dict:
     return kept
 
 
+AUTO_CREATED_LIMIT = 200
+
+
+def creation_block(cfg: dict, projects: list[Project], previous_count: int) -> str:
+    """Why automatic project creation is off for this run ("" = allowed). A scan that suddenly finds far fewer
+    folders than the last run (R: half-reachable, wrong vault) must never create projects: that makes duplicates."""
+    if not cfg.get("auto_create_projects"):
+        return "switched off"
+    me = cfg.get("me") or {}
+    if not str(me.get("name") or "").strip() and not str(me.get("email") or "").strip():
+        return "your name and email are not set, so the To: line cannot be checked"
+    if (cfg.get("offline") or {}).get("active"):
+        return "working from the backup vault"
+    if previous_count and not projects:
+        return "the vault scan found no projects (last run: %d)" % previous_count
+    if previous_count >= 5 and len(projects) < previous_count * 0.8:
+        return "the vault scan found %d projects, the last run had %d" % (len(projects), previous_count)
+    return ""
+
+
+def old_archive_numbers(cfg: dict) -> set[str]:
+    """SO/QTE/020 numbers of folders moved to <vault>/_Archive by older versions. The scan skips _Archive, so
+    without this an assignment email for an archived project would make a duplicate folder."""
+    root = Path(cfg.get("vault") or "") / matcher.ARCHIVE_DIR
+    numbers: set[str] = set()
+    for folder, _customer in matcher.project_dirs(root, [], matcher.folder_layout(cfg)):
+        keys = matcher.extract_keys(folder.name)
+        numbers |= keys["so"] | keys["qte"] | keys["project_no"]
+    return numbers
+
+
+def entry_numbers(entry: dict) -> set[str]:
+    parsed = entry.get("parsed") or {}
+    return set(parsed.get("so") or []) | set(parsed.get("qte") or []) | ({parsed["project_no"]} if parsed.get("project_no") else set())
+
+
+def auto_create_project(cfg: dict, entry: dict, dry_run: bool) -> Project | None:
+    try:
+        info = projects_mod.create_from_pending(cfg, entry, dry_run=dry_run)
+    except (OSError, ValueError) as exc:
+        out("  cannot create project: %s" % exc)
+        return None
+    out("  %s project folder: %s" % ("would create" if dry_run else "created", info["folder"]))
+    parsed = entry.get("parsed") or {}
+    return Project(
+        folder=info["folder"],
+        name=Path(info["folder"]).name,
+        note_path=None if dry_run else info["note_path"],
+        customer=parsed.get("customer", ""),
+        project_no=parsed.get("project_no", ""),
+        so=list(parsed.get("so") or []),
+        qte=list(parsed.get("qte") or []),
+        level=parsed.get("level", ""),
+        stage="Pre-Kickoff",
+    )
+
+
+def apply_learned_keys(projects: list[Project], learned: dict) -> None:
+    for project in projects:
+        extra = learned.get(project.key) or {}
+        for name in ("so", "qte"):
+            values = getattr(project, name)
+            values.extend(value for value in extra.get(name) or [] if value not in values)
+
+
+def learn_keys(projects: list[Project], emails: list[Email], rules: dict, learned: dict) -> list[str]:
+    """Folders named only by their 020 number pick up the SO/QTE numbers of their assignment email, so later
+    emails that quote only the SO still match. A number already used by another folder is never taken, and a
+    020 number shared by several folders teaches nothing."""
+    by_number: dict[str, list[Project]] = {}
+    for project in projects:
+        if project.project_no:
+            by_number.setdefault(project.project_no, []).append(project)
+    owned = {name: {value for p in projects for value in getattr(p, name)} for name in ("so", "qte")}
+    added: list[str] = []
+    for email in sorted(emails, key=lambda e: e.date):
+        if rules_mod.is_reply(email.subject):
+            continue
+        trigger = rules_mod.classify(email.subject, rules)
+        if not trigger or trigger.get("id") != "assignment":
+            continue
+        parsed = matcher.parse_assignment_subject(email.subject)
+        owners = by_number.get(parsed.get("project_no") or "") or []
+        if len(owners) != 1:
+            continue
+        project = owners[0]
+        for name in ("so", "qte"):
+            for value in parsed.get(name) or []:
+                if value in owned[name]:
+                    continue
+                owned[name].add(value)
+                getattr(project, name).append(value)
+                bucket = learned.setdefault(project.key, {})
+                bucket.setdefault(name, []).append(value)
+                added.append("%s: %s" % (project.name, value))
+    return added
+
+
+def number_conflicts(projects: list[Project], vault: str | Path) -> list[dict]:
+    """SO/QTE/020 numbers that more than one folder claims; emails for them go to whichever folder is found first."""
+    owners: dict[str, list[Project]] = {}
+    for project in projects:
+        numbers = set(project.so) | set(project.qte) | ({project.project_no} if project.project_no else set())
+        for number in numbers:
+            owners.setdefault(number, []).append(project)
+    return [
+        {"number": number, "folders": sorted(matcher.relative_folder(vault, p.folder) for p in found)}
+        for number, found in sorted(owners.items())
+        if len(found) > 1
+    ]
+
+
 def collect_trigger_dates(
     cfg: dict,
     rules: dict,
@@ -157,7 +244,11 @@ def collect_trigger_dates(
     emails: list[Email],
     state: dict,
     dry_run: bool,
+    created: list[dict] | None = None,
+    archive_numbers: set[str] | None = None,
 ) -> tuple[dict, list[dict], dict, dict]:
+    """created: a list to collect automatically created projects in; None = assignments wait in the hub.
+    archive_numbers: numbers of old _Archive folders; their assignments always wait in the hub."""
     triggers: dict[str, dict[str, date]] = {}
     unmatched: list[dict] = []
     matched: dict[str, list[tuple[Email, str, bool]]] = {}
@@ -177,7 +268,7 @@ def collect_trigger_dates(
             continue
         local_date = email.date.astimezone().date()
         reply = rules_mod.is_reply(email.subject)
-        project, _keys = matcher.match_email(email, index)
+        project = subject_project(email.subject, index) or matcher.match_email(email, index)[0]
         forced = rules_mod.trigger_by_id(rules, override) if override else None
         trigger = forced or (None if reply else rules_mod.classify(email.subject, rules))
 
@@ -185,19 +276,30 @@ def collect_trigger_dates(
             if trigger and trigger.get("id") == "assignment" and matcher.addressed_to_me(email.to, cfg.get("me")) is False:
                 continue
             if trigger and trigger.get("id") == "assignment":
-                if cfg.get("auto_create_projects", True):
-                    parsed = matcher.parse_assignment_subject(email.subject)
-                    project = create_project(cfg, email, parsed, trigger.get("stage", ""), dry_run)
+                parsed = matcher.parse_assignment_subject(email.subject)
+                body_parsed = extract.parse_assignment_body(email.body_text)
+                entry = projects_mod.pending_entry(email, parsed, body_parsed, matcher.folder_layout(cfg))
+                existing = pending.get(email.message_id)
+                in_archive = entry_numbers(entry) & (archive_numbers or set())
+                if created is not None and in_archive and (existing is None or existing.get("status") == "new"):
+                    out("  not created automatically (already in %s: %s): %s" % (matcher.ARCHIVE_DIR, ", ".join(sorted(in_archive)), email.subject))
+                elif created is not None and (existing is None or existing.get("status") == "new"):
+                    project = auto_create_project(cfg, entry, dry_run)
                     if project is not None:
+                        pending.pop(email.message_id, None)
                         projects.append(project)
                         index = matcher.build_index(projects)
-                else:
-                    parsed = matcher.parse_assignment_subject(email.subject)
-                    body_parsed = extract.parse_assignment_body(email.body_text)
-                    entry = projects_mod.pending_entry(email, parsed, body_parsed, matcher.folder_layout(cfg))
-                    existing = pending.get(email.message_id)
-                    if existing is None or existing.get("status") != "dismissed":
-                        pending[email.message_id] = entry
+                        created.append(
+                            {
+                                "key": project.key,
+                                "folder": matcher.relative_folder(cfg.get("vault") or "", project.folder),
+                                "subject": email.subject,
+                                "message_id": email.message_id,
+                                "at": datetime.now().isoformat(timespec="seconds"),
+                            }
+                        )
+                if project is None and (existing is None or existing.get("status") != "dismissed"):
+                    pending[email.message_id] = entry
             if project is None:
                 reason = "no matching project" if trigger else "no matching project, no trigger"
                 unmatched.append(unmatched_entry(local_date, email, reason, keys))
@@ -238,6 +340,182 @@ def collect_trigger_dates(
     return triggers, unmatched, prune_pending(pending, projects), matched
 
 
+def sender_name(sender: str) -> str:
+    """'Chris Derby </O=EXCHANGELABS/...>' -> 'chris derby'."""
+    return re.sub(r"\s+", " ", (sender or "").split("<")[0].replace('"', "")).strip().lower()
+
+
+def project_ids(project: Project) -> set[str]:
+    return set(project.so or ()) | set(project.qte or ()) | ({project.project_no} if project.project_no else set())
+
+
+def row_ids(row: dict) -> set[str]:
+    keys = matcher.extract_keys(row.get("name") or "")
+    return keys["so"] | keys["qte"] | keys["project_no"]
+
+
+def foreign_row(row: dict, ids: set[str]) -> bool:
+    """A row naming another project's SO/QTE/020 number (a table pasted from a different job)."""
+    named = row_ids(row)
+    return bool(named) and not (named & ids)
+
+
+def table_mismatch(rows: list[dict], ids: set[str]) -> set[str]:
+    """The table's SO/QTE/020 numbers when none of them is one of ids (wrong table pasted under this subject), else empty.
+    One match is enough: a customer often has several SOs on one project. Customer names are never compared."""
+    named: set[str] = set()
+    for row in rows:
+        named |= row_ids(row)
+    return named if named and not (named & ids) else set()
+
+
+def subject_project(subject: str, index: dict) -> Project | None:
+    """The project of the first known id in the subject ("Amazon SO-283465 ... (Previously SO-268726)" -> SO-283465)."""
+    found: list[tuple[int, Project]] = []
+    for name, values in matcher.extract_keys(subject).items():
+        for value in values:
+            if value in index[name]:
+                found.append((subject.find(value.split("-")[-1]), index[name][value]))
+    return min(found, key=lambda item: item[0])[1] if found else None
+
+
+def collect_timelines(
+    rules: dict,
+    projects: list[Project],
+    emails: list[Email],
+    state: dict,
+    me_name: str = "",
+    skipped: list[str] | None = None,
+) -> dict[str, list[dict]]:
+    """Every readable PM table per project, oldest first. Replies count only for the text above the quoted thread.
+    A table whose SO/QTE/020 numbers match neither the subject nor the project is skipped whole (noted in skipped)."""
+    index = matcher.build_index(projects)
+    overrides = state.get("email_overrides") or {}
+    found: dict[str, list[dict]] = {}
+    for email in sorted(emails, key=lambda e: e.date):
+        body = email.body_text or ""
+        if "duration" not in body.lower() or overrides.get(email.message_id) == "ignore":
+            continue
+        project = subject_project(email.subject, index)
+        if project is None and not matcher.has_keys(matcher.extract_keys(email.subject)):
+            project, _keys = matcher.match_email(email, index)
+        if project is None:
+            continue
+        reply = rules_mod.is_reply(email.subject)
+        subject_keys = matcher.extract_keys(email.subject)
+        ids = project_ids(project) | subject_keys["so"] | subject_keys["qte"] | subject_keys["project_no"]
+        parsed = extract.parse_schedule(extract.own_text(body) if reply else body, me_name)
+        mismatch = table_mismatch(parsed, ids)
+        if mismatch:
+            if skipped is not None:
+                skipped.append(
+                    "timeline skipped: %s %s (subject/project %s, table %s)"
+                    % (email.date.astimezone().date().isoformat(), email.subject.strip()[:80],
+                       ", ".join(sorted(ids)), ", ".join(sorted(mismatch)))
+                )
+            continue
+        rows = [row for row in parsed if not foreign_row(row, ids)]
+        if not rows:
+            continue
+        forced = overrides.get(email.message_id)
+        trigger_id = forced or (None if reply else (rules_mod.classify(email.subject, rules) or {}).get("id"))
+        kind = "Reply" if reply and not forced else {"kickoff": "KO", "at_notification": "A&T"}.get(trigger_id, "Email")
+        local_date = email.date.astimezone().date()
+        found.setdefault(project.key, []).append(
+            {
+                "date": local_date,
+                "sender": sender_name(email.sender),
+                "kind": kind,
+                "reply": reply and not forced,
+                "kickoff": trigger_id == "kickoff",
+                "rows": rows,
+            }
+        )
+    return found
+
+
+def trusted_senders(tables: list[dict], pm_name: str = "") -> set[str]:
+    """The project's KO senders plus the PM named on the tracker sheet."""
+    trusted = {table["sender"] for table in tables if table["kickoff"] and table["sender"]}
+    for name in re.split(r"[/,]", pm_name or ""):
+        if name.strip():
+            trusted.add(re.sub(r"\s+", " ", name).strip().lower())
+    return trusted
+
+
+def merge_timelines(rules: dict, tables: list[dict], pm_name: str = "") -> list[dict]:
+    """One row per milestone, each from the newest trusted table that lists it; carries a 'source' like 'A&T 11/16'."""
+    trusted = trusted_senders(tables, pm_name)
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for table in sorted(tables, key=lambda t: t["date"]):
+        if trusted:
+            if table["sender"] not in trusted:
+                continue
+        elif table["reply"]:
+            continue
+        source = "%s %d/%d" % (table["kind"], table["date"].month, table["date"].day)
+        for milestone_id, row in milestone_rows(rules, table["rows"]).items():
+            if milestone_id not in merged:
+                order.append(milestone_id)
+            merged[milestone_id] = dict(row, source=source)
+    return [merged[milestone_id] for milestone_id in order]
+
+
+def previous_projects(path: Path) -> dict[str, dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    rows = data.get("projects") if isinstance(data, dict) else None
+    return {str(row.get("key") or ""): row for row in rows or [] if isinstance(row, dict)}
+
+
+def archived_stub(folder: Path, entry: dict) -> Project:
+    note = str(entry.get("note_path") or "")
+    return Project(
+        folder=str(folder),
+        name=folder.name,
+        note_path=str(folder / Path(note).name) if note else None,
+        customer=str(entry.get("customer") or ""),
+        project_no=str(entry.get("project_no") or ""),
+        so=list(entry.get("so") or []),
+        qte=list(entry.get("qte") or []),
+        level=str(entry.get("level") or ""),
+        stage=str(entry.get("stage") or "Unknown"),
+        stage_manual=str(entry.get("stage_manual") or ""),
+        stage_manual_source=str(entry.get("stage_manual_source") or ""),
+        so_dismissed=list(entry.get("so_dismissed") or []),
+        assigned=str(entry.get("assigned") or ""),
+        archived=True,
+    )
+
+
+def scan_projects(cfg: dict, archived: dict, previous: dict[str, dict]) -> tuple[list[Project], dict[str, dict]]:
+    """Projects in the vault. Archived folders (state archived_projects) are not opened: they come back from the
+    previous snapshot as frozen entries ({key: entry}) so their numbers still match emails and the sheet."""
+    vault = cfg.get("vault") or ""
+    by_rel = {
+        str(info.get("rel") or "").lower(): key
+        for key, info in archived.items()
+        if isinstance(info, dict) and info.get("rel")
+    }
+    projects: list[Project] = []
+    frozen: dict[str, dict] = {}
+    for folder, customer in matcher.project_dirs(vault, cfg.get("exclude_folders") or [], matcher.folder_layout(cfg)):
+        key = by_rel.get(matcher.relative_folder(vault, folder).lower())
+        entry = previous.get(key) if key else None
+        if entry is not None:
+            stub = archived_stub(Path(folder), entry)
+            frozen[stub.key] = entry
+            projects.append(stub)
+            continue
+        project = matcher.project_from_folder(folder, customer)
+        project.archived = project.key in archived
+        projects.append(project)
+    return projects, frozen
+
+
 def ensure_notes(projects: list[Project], dry_run: bool) -> list[str]:
     """Give every project folder without a .md note a minimal one (never overwrites)."""
     created: list[str] = []
@@ -270,6 +548,21 @@ def milestone_rows(rules: dict, schedule: list[dict] | None) -> dict[str, dict]:
         if milestone is not None and milestone["id"] not in found:
             found[milestone["id"]] = row
     return found
+
+
+def add_team_fields(cfg: dict, snapshot: dict, schedule_matches: dict) -> None:
+    """Schedule window, PM and owner-mismatch flags per project, for the team status and the dashboard."""
+    for row in snapshot.get("projects") or []:
+        sp = schedule_matches.get(row.get("key")) or {}
+        if sp:
+            row["schedule"] = {
+                "pm": str(sp.get("pm") or ""),
+                "level": str(sp.get("level") or ""),
+                "start": str(sp.get("start") or ""),
+                "finish": str(sp.get("finish") or ""),
+                "people": [str(p.get("name") or "") for p in sp.get("people") or [] if p.get("name")],
+            }
+        row["owner_flags"] = team.owner_flags(cfg, row, sp.get("people") or [], row.get("schedule_mine"))
 
 
 def pick_schedule(
@@ -322,7 +615,9 @@ def build_tasks(
             project_no=project.project_no,
             source="tracker",
             milestone=True,
-            due_source=(chart_source or "chart") if iso_date((row or {}).get("finish")) else "",
+            due_source=(
+                "schedule" if chart_source == "schedule" else str((row or {}).get("source") or chart_source or "chart")
+            ) if iso_date((row or {}).get("finish")) else "",
         )
         parents[milestone["id"]] = parent
         if milestone.get("enabled", True) is not False:
@@ -341,8 +636,7 @@ def build_tasks(
         due = None
         due_source = ""
         if parent is not None and parent.due is not None:
-            due, trigger_date = parent.due, parent.trigger_date
-            due_source = parent.due_source
+            due, trigger_date, due_source = parent.due, parent.trigger_date, parent.due_source
         elif trigger_date is not None and offset is not None:
             due = rules_mod.add_business_days(trigger_date, int(offset), holidays)
             due_source = "%s+%s" % (step.get("trigger") or "", offset)
@@ -556,19 +850,12 @@ def apply_due_overrides(
                 override = {"due": entry["due"].isoformat(), "note": ""}
                 overrides[task.id] = override
         if override:
-            task.due = iso_date(override.get("due"))
+            due = iso_date(override.get("due"))
+            if due != task.due:
+                task.due_source = "edited" if due else ""
+            task.due = due
             task.note = override.get("note") or ""
     return dues
-
-
-def latest_kickoff(items: list[tuple[Email, str, bool]]) -> Email | None:
-    latest = None
-    for email, trigger_id, reply in items:
-        if reply or trigger_id != "kickoff":
-            continue
-        if latest is None or email.date > latest.date:
-            latest = email
-    return latest
 
 
 def project_info(matched: dict) -> dict[str, dict]:
@@ -677,6 +964,17 @@ def so_hints(emails: list[Email], projects: list[Project]) -> dict[str, list[dic
     return {key: sorted(items.values(), key=lambda item: item["so"]) for key, items in found.items()}
 
 
+def archived_new_emails(items: list, since: str) -> int:
+    """Trigger emails (not replies) that arrived after the project was archived."""
+    try:
+        cutoff = datetime.fromisoformat(since)
+    except ValueError:
+        return 0
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.astimezone()
+    return sum(1 for email, _trigger, reply in items if not reply and email.date.astimezone() > cutoff)
+
+
 def build_snapshot(
     today: date,
     projects: list[Project],
@@ -691,7 +989,11 @@ def build_snapshot(
     schedule: dict | None = None,
     schedule_mine: int = 0,
     schedule_matched: int = 0,
+    archived: dict | None = None,
+    frozen: dict | None = None,
 ) -> dict:
+    archived = archived or {}
+    frozen = frozen or {}
     sheet_rows = {}
     if sheet and sheet.get("ok"):
         sheet_rows = ape_sheet.match(
@@ -742,8 +1044,27 @@ def build_snapshot(
                 row["minutes"] = calendar_minutes(email)
                 row["start"] = email.date.astimezone().isoformat(timespec="seconds")
             emails.append(row)
+        if project.key in frozen:
+            since = str((archived.get(project.key) or {}).get("at") or "")
+            rows.append(
+                dict(
+                    frozen[project.key],
+                    folder=project.folder,
+                    note_path=project.note_path,
+                    emails=emails or list(frozen[project.key].get("emails") or []),
+                    archived=True,
+                    archived_at=since,
+                    archived_new_emails=archived_new_emails(items, since),
+                )
+            )
+            continue
+        archived_extra = {}
+        if project.key in archived:
+            since = str((archived.get(project.key) or {}).get("at") or "")
+            archived_extra = {"archived": True, "archived_at": since, "archived_new_emails": archived_new_emails(items, since)}
         rows.append(
             {
+                **archived_extra,
                 "key": project.key,
                 "name": project.name,
                 "folder": project.folder,
@@ -920,20 +1241,40 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
     out("vault: %s" % cfg.get("vault"))
     out("today: %s" % today.isoformat())
 
-    projects = matcher.build_projects(
-        cfg.get("vault") or "", cfg.get("exclude_folders") or [], matcher.folder_layout(cfg)
-    )
+    if not notes.lp(cfg.get("vault") or "").is_dir():
+        reason = (cfg.get("offline") or {}).get("reason") or "the vault is not reachable"
+        out("run cancelled: %s. Nothing was changed." % reason)
+        return 3
+
+    stored_state = state_mod.load(state_path)
+    snapshot_path = Path(cfg.get("snapshot_path") or (ROOT / "output" / "snapshot.json"))
+    archived = dict(stored_state.get("archived_projects") or {})
+    previous = previous_projects(snapshot_path)
+    projects, frozen = scan_projects(cfg, archived, previous)
     created_notes = ensure_notes(projects, args.dry_run)
     if created_notes:
         out("project notes %s: %d (folders that had no .md note)" % ("that would be created" if args.dry_run else "created", len(created_notes)))
-    index = matcher.build_index(projects)
+    learned = {key: dict(value) for key, value in (stored_state.get("learned_keys") or {}).items() if isinstance(value, dict)}
+    apply_learned_keys(projects, learned)
     emails = collect_all(cfg, since_days=args.since)
-    out("projects: %d, emails: %d" % (len(projects), len(emails)))
+    out("projects: %d (%d archived, not read), emails: %d" % (len(projects), len(frozen), len(emails)))
+    for line in learn_keys(projects, emails, rules, learned):
+        out("learned number from assignment email: %s" % line)
+    conflicts = number_conflicts(projects, cfg.get("vault") or "")
+    for conflict in conflicts:
+        out("number used by %d folders: %s (%s)" % (len(conflict["folders"]), conflict["number"], "; ".join(conflict["folders"])))
+    index = matcher.build_index(projects)
 
-    stored_state = state_mod.load(state_path)
+    block = creation_block(cfg, projects, len(previous))
+    if block and cfg.get("auto_create_projects"):
+        out("automatic project creation skipped: %s" % block)
+    created: list[dict] | None = None if block else []
     triggers, unmatched, pending, matched = collect_trigger_dates(
-        cfg, rules, projects, index, emails, stored_state, args.dry_run
+        cfg, rules, projects, index, emails, stored_state, args.dry_run, created=created,
+        archive_numbers=old_archive_numbers(cfg) if created is not None else None,
     )
+    if created:
+        out("projects created automatically: %d" % len(created))
     info = project_info(matched)
     sheet = None
     sheet_matches: dict[str, dict] = {}
@@ -995,12 +1336,18 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         out("schedule: %s" % (schedule_data.get("error") or "unavailable"))
     stages = rules_mod.workflow_stages(rules)
     me_name = str((cfg.get("me") or {}).get("name") or "")
+    skipped_tables: list[str] = []
+    timelines = collect_timelines(rules, projects, emails, stored_state, me_name, skipped_tables)
+    for line in skipped_tables:
+        out(line)
     due_overrides = dict(stored_state.get("due_overrides") or {})
     schedule_ticked = dict(stored_state.get("schedule_ticked") or {})
     computed_due: dict[str, str | None] = {}
 
     note_changes: list[str] = []
     for project in projects:
+        if project.key in frozen:
+            continue
         project_triggers = dict(triggers.get(project.key) or {})
         if "assignment" not in project_triggers and project.assigned:
             try:
@@ -1017,8 +1364,11 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
                 pass
         if not project_triggers and not sp:
             continue
-        kickoff = latest_kickoff(matched.get(project.key) or [])
-        email_rows = extract.parse_schedule(kickoff.body_text, me_name) if kickoff is not None else []
+        email_rows = merge_timelines(
+            rules,
+            timelines.get(project.key) or [],
+            str((sheet_matches.get(project.key) or {}).get("pm_name") or ""),
+        )
         mpp_rows = ms_project.schedule_rows(sp) if sp else []
         schedule, schedule_source = pick_schedule(
             rules, mpp_rows, email_rows, bool((cfg.get("ms_project") or {}).get("authoritative", True))
@@ -1052,8 +1402,6 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         computed_due.update(apply_due_overrides(tasks, entries, due_overrides, stored_state.get("computed_due") or {}))
         project.tasks = tasks
         if not project.note_path or (args.dry_run and not notes.lp(project.note_path).is_file()):
-            if cfg.get("auto_create_projects", True):
-                out("  would create note for %s" % project.name)
             continue
         project_entry = info.get(project.key) or {}
         updates = {
@@ -1085,7 +1433,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
                 out(diff.rstrip("\n"))
 
     for project in projects:
-        if project.tasks:
+        if project.tasks or project.key in frozen:
             continue
         if project.note_path and notes.lp(project.note_path).is_file():
             text, _nl, _bom, _enc = notes.read_text(project.note_path)
@@ -1096,7 +1444,8 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
 
     ensure_dashboard_note(cfg, args.dry_run)
 
-    lines = summary_lines(projects, unmatched, today, due_soon_days)
+    active = [project for project in projects if not project.archived]
+    lines = summary_lines(active, unmatched, today, due_soon_days)
     out("")
     for line in lines:
         out(line)
@@ -1115,7 +1464,7 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         else:
             dashboard.write(
                 target,
-                projects,
+                active,
                 unmatched,
                 today,
                 due_soon_days,
@@ -1144,21 +1493,33 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
                 "computed_due": computed_due,
                 "schedule_ticked": schedule_ticked,
                 "last_run": generated,
+                "learned_keys": learned,
+                "auto_created": (list(stored_state.get("auto_created") or []) + list(created or []))[-AUTO_CREATED_LIMIT:],
             }
         )
         state_mod.save(state_path, state_data)
         write_log(log_path, lines)
         out("state written: %s" % state_path)
         out("log appended: %s" % log_path)
-        snapshot_path = Path(cfg.get("snapshot_path") or (ROOT / "output" / "snapshot.json"))
         snapshot = build_snapshot(
             today, projects, triggers, matched, info, pending, unmatched, generated, sheet=sheet,
             hints=so_hints(emails, projects), schedule=schedule_data, schedule_mine=schedule_mine,
-            schedule_matched=len(schedule_matches),
+            schedule_matched=len(schedule_matches), archived=archived, frozen=frozen,
         )
+        snapshot["conflicts"] = conflicts
+        snapshot["auto_create"] = {"enabled": bool(cfg.get("auto_create_projects")), "blocked": block if cfg.get("auto_create_projects") else ""}
+        add_team_fields(cfg, snapshot, schedule_matches)
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
         out("snapshot written: %s" % snapshot_path)
+        try:
+            result = team.publish(cfg, snapshot, archived, today)
+        except Exception as exc:
+            result = {"ok": False, "skipped": str(exc) or exc.__class__.__name__}
+        if result.get("ok"):
+            out("team status published: %s (%d projects)" % (result["folder"], result["projects"]))
+        elif team.conf(cfg).get("publish"):
+            out("team status not published: %s" % result.get("skipped"))
     return 0
 
 

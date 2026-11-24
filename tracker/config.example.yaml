@@ -55,8 +55,12 @@ holidays:
   - 2027-05-31
   - 2027-07-05
   - 2027-09-06
-# true: new assignment emails create project folders automatically. false: they wait in the hub for "Create project".
-# Either way, an assignment email only counts as yours when me.name or me.email is on its To: line (CC doesn't count).
+# New assignment emails wait in the hub for "Create project". An assignment email only counts as yours
+# when me.name or me.email is on its To: line (CC doesn't count).
+# true: the refresh creates the folder, note and template files itself and lists them on the Dashboard under
+# "Created automatically" (with Delete). It never creates when the vault is unreachable, when working from the
+# backup vault, when the scan finds no projects or under 80% of the last run's count, when a folder already has
+# one of the email's SO/QTE/020 numbers, or when me.name and me.email are both empty. Also in hub Settings.
 auto_create_projects: false
 # Optional: your own email rules (setup.cmd -> Email rules). Without this, the triggers in rules.yaml apply.
 # email_rules:
@@ -138,6 +142,17 @@ ms_project:
   include_trt: false    # also read "TRT |" pre-sales rows
   skip: ["[", "External Lab Space Requests"]   # level-1 section names that are never projects (a project also needs an SO-/QTE- number)
   java_home: ""
+
+# --- Team status (manager view) ----------------------------------------------------
+# Each hub publishes a short status of your active projects to <shared_dir>/<your name>/status.json (+ status.js)
+# after every refresh, and adds you to <shared_dir>/team.js on the first publish. Personal tasks are never published.
+# Nothing is published while R: is unreachable or the hub works from the backup vault.
+# Roles are set by hand in team.js: "role": "manager" or "principal" may reassign projects from the hub's Team page.
+# PMs open "<shared_dir>/Team Status.html" (read-only, no install).
+team:
+  publish: true
+  shared_dir: "R:/APE_AE/Project"
+  manager_mode: false   # show the Team page without a reassign role (view only)
 
 # --- Backup vault (offline copy of the project folder) ----------------------------
 # The hub copies the vault (and any extra folders) here every day at daily_time; a backup missed while the PC

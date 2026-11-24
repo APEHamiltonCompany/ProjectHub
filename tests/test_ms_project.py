@@ -865,11 +865,27 @@ class JavaHomeTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.folder = Path(self.tmp.name)
 
-    def make_java(self, *parts: str) -> Path:
+    def make_java(self, *parts: str, version: str = "17.0.2") -> Path:
         home = self.folder.joinpath(*parts)
-        (home / "bin").mkdir(parents=True, exist_ok=True)
+        (home / "bin" / "server").mkdir(parents=True, exist_ok=True)
         (home / "bin" / "java.exe").write_text("", encoding="utf-8")
+        (home / "bin" / "server" / "jvm.dll").write_text("", encoding="utf-8")
+        (home / "release").write_text('JAVA_VERSION="%s"\n' % version, encoding="utf-8")
         return home
+
+    def test_old_java_on_path_is_skipped(self):
+        old = self.make_java("jre8", version="1.8.0_361")
+        with mock.patch.dict(os.environ, {"LOCALAPPDATA": "", "JAVA_HOME": str(old)}):
+            with mock.patch.object(ms_project.shutil, "which", return_value=str(old / "bin" / "java.exe")):
+                self.assertEqual(ms_project.find_java_home({}), "")
+
+    def test_stub_without_jvm_is_skipped(self):
+        stub = self.folder / "javapath"
+        (stub / "bin").mkdir(parents=True)
+        (stub / "bin" / "java.exe").write_text("", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"LOCALAPPDATA": "", "JAVA_HOME": str(stub)}):
+            with mock.patch.object(ms_project.shutil, "which", return_value=None):
+                self.assertEqual(ms_project.find_java_home({}), "")
 
     def test_localappdata_layout(self):
         home = self.make_java("ProjectHub", "jre", "jdk-17")

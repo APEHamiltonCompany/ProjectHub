@@ -94,6 +94,8 @@ def apply_overlay(cfg: dict, overlay: dict) -> dict:
         value = overlay.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = value.strip()
+    if isinstance(overlay.get("auto_create_projects"), bool):
+        merged["auto_create_projects"] = overlay["auto_create_projects"]
     checklist = overlay.get("checklist_optional")
     if isinstance(checklist, list):
         merged["checklist_optional"] = list(dict.fromkeys(str(value) for value in checklist))
