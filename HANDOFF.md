@@ -1,4 +1,4 @@
-# ProjectHub handoff (2026-11-20)
+# ProjectHub handoff (2026-11-24)
 
 Start a new chat with: "Read HANDOFF.md and continue." It covers the current state, the uncommitted work, how to run things, and the open items.
 
@@ -30,34 +30,6 @@ Start a new chat with: "Read HANDOFF.md and continue." It covers the current sta
 - Use `$TMPDIR` for scratch files, not `/tmp`.
 - To wait on the tracker, don't poll for `*tracker.tracker*` in process command lines: the waiting shell matches itself.
 
-## Committed so far
-- `93c9b1c` KO timeline milestones with nested steps, level filter, finish-date scheduling. **Not pushed yet.**
-- Earlier work: `f94dcda` backups/offline mode, `33d96b5` six buckets + file templates + sorting, `a0f7ef1` merge with upstream.
-
-## UNCOMMITTED work (ready to commit; tests pass)
-Files:
-- `tracker/tracker.py`, `extract.py`, `rules.py`, `rules.yaml`, `models.py`
-- `hub/app.py`, `hub/templates/project.html`
-- `USER_GUIDE.md`
-- new `tests/test_timelines.py`
-
-What it does:
-1. **Newest PM table wins, per milestone.**
-   - Dates come from the newest table from a trusted PM in any project email: the KO email, an A&T notification, a "KO"+ID subject, or a PM reply. For a reply, only the text above the quoted thread counts (`extract.own_text`).
-   - A trimmed table only updates the milestones it lists.
-   - Code: `collect_timelines` → `merge_timelines` in `tracker/tracker.py`.
-2. **Trusted senders:** the project's KO senders, plus the PM on the tracker sheet. A teammate quoting an old table doesn't count.
-3. **KO subject rule:** a whole-word "KO" counts as Kickoff only if the subject also has an SO/QTE/020 number (`rules.py`).
-4. **Summary row:** only the real project summary row is dropped (the row whose dates span all the other rows). Trimmed tables keep their first row.
-5. **Wrong-table check:**
-   - If none of the SO/QTE/020 numbers in a table's rows matches the subject or the project's numbers, the whole table is skipped and no dates change.
-   - The run log gets a line: `timeline skipped: <date> <subject> (subject/project ..., table ...)`. Log only, as the user asked; no notice in the hub.
-   - One matching number is enough. Customer names are never compared ("AstraZeneca" subject with "Medimmune" rows is fine).
-6. **Project choice:** both the dates and the stage use the first project number in the subject (`subject_project`). Example: "Amazon SO-283465 … (Previously SO-268726)" no longer moves the Corteva SO-268726 project.
-7. **Date source shown:** the project page shows where each date came from, e.g. "2026-12-11 (A&T 11/16)".
-
-Verified on the hub's real 12:30 run: no active project's milestone dates changed. Neogenomics (0205423, Completion) gained 5 dates from Scott's 9/22 table, because the subject's SO now counts as a match.
-
 ## Scheduling model (built; see USER_GUIDE 2.6/2.6a, `tracker/rules.yaml`)
 - **Buckets:** Pre-Kickoff, Pre-Fabrication, Fabrication, System Test, Closeout, Completion.
 - **Stage:** the furthest bucket any trigger email reached. A manual stage overrides it.
@@ -80,24 +52,15 @@ Verified on the hub's real 12:30 run: no active project's milestone dates change
 - **Undated later-bucket steps stay visible** in Focus "No date". The user said to leave them for now.
 - Approved milestone → steps grouping: PreFabApps (ADP start, kickoff, wiring diagram, test matrix, design review); Send Test Plan (Apps Plan, parts for testing); Testing (app dev, system setup, device testing, troubleshooting); Pre-FAT/iFAT/FAT (iFAT, FAT, post-FAT); AE Pack Up (pack up); AutoE Close Out (closeout docs, closeout reply).
 
-## PM table format (for the user's request to the PMs)
-- **Columns:** Task Name, Duration, Start, Finish.
-  - One extra non-date column (e.g. Predecessors) between Duration and Start is fine.
-  - Resource Names after Finish is fine.
-- **Duration** is only used to find where each row starts. It must look like `N day(s)` (decimals and `?` are OK).
-- **Dates:** M/D/YY or M/D/YYYY, with an optional weekday.
-- **Images can't be read.** 8 of 25 KO emails have the timeline as a pasted image: Aman Aman (5), Cindy Heinrich (2), Matt Sturdivant (1).
+## Upcoming features (post-rollout backlog, to implement gradually)
+- [ ] **Drafting for Apps Support emails**
+  - Pull additional links from project emails, see project-support-email.md
+- [ ] **Search repeat projects for compliance pages on the R: drive**
+  - Upload project compliance pages to the R: drive on project completion
+- [ ] **Explore cases for repeat projects with multiple different 020- parts**
+- [ ] **Create Parts List entries in SharePoint**
+- [ ] **Style with Hamilton colors**
 
-## Open / next items
-1. **Commit the uncommitted work** when the user says to; the user then pushes. Offer this.
-2. Check in a browser that the project page shows nested milestones with date sources. So far only the HTML has been checked.
-3. One due override left in `tracker/state.json`: CUNY SO-288406 `wiring_diagram` = 2026-09-29. The user may have set it by hand; ask before removing it.
-4. Later, after the structure settles: trim redundant tasks and redesign the Focus dashboard and project views.
-5. Leftover junk: the `pre-merge backup` git stash (user to drop) and the untracked `ProjectHubView.png`.
-
-## Pinned or parked (don't start until the user reopens it)
-- **Project Support Email draft button + CPR/DR link extraction.** Full plan in agent memory `project-support-email.md`. The CPR/links snapshot bug that plan mentions is fixed: 19 projects now have a CPR and 32 have links.
-- **Team rollout** (shared team views, reassigning projects): parked. Fix the user's own hub first, then test on a second machine.
 
 ## Key code locations
 - `tracker/tracker.py`:

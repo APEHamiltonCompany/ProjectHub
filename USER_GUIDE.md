@@ -85,6 +85,29 @@ powershell.exe -NoProfile -Command "Start-ScheduledTask -TaskName ProjectHub"
 ```
 To run the hub in a visible window instead (for troubleshooting), double-click `run_hub.cmd`. Stop the scheduled copy first, because only one copy can use the hub port.
 
+### 1.5a Restart the hub
+The hub is not a Windows service. It is the scheduled task **ProjectHub**, which runs `.venv\Scripts\pythonw.exe -m tracker.hub` at logon. Because `pythonw` has no window, Task Manager shows it only as a `pythonw.exe` process on the **Details** tab.
+
+Restart it in any of these ways:
+1. **Task Scheduler:** Start menu > *Task Scheduler* > *Task Scheduler Library*. Right-click **ProjectHub**, choose **End**, then right-click it again and choose **Run**.
+2. **PowerShell:**
+   ```powershell
+   Stop-ScheduledTask -TaskName ProjectHub
+   Start-ScheduledTask -TaskName ProjectHub
+   ```
+   If `http://localhost:8765` still answers after the stop, an old hub process is still running. Kill it, then start the task again:
+   ```powershell
+   Get-CimInstance Win32_Process | ? { $_.CommandLine -like "*tracker.hub*" } | % { Stop-Process -Id $_.ProcessId -Force }
+   Start-ScheduledTask -TaskName ProjectHub
+   ```
+3. **Sign out and back in, or reboot.** The task starts at logon.
+
+After a restart:
+- The hub runs a full tracker refresh. The dashboard shows the last snapshot until the refresh finishes.
+- Reload any open hub tabs. The security token changes on every restart, so a page opened before the restart gets "403 forbidden" when you click something.
+
+Restart the hub after you edit `tracker\config.yaml` or `tracker\rules.yaml` by hand, or after you update the code. Changes made on the Settings page apply without a restart.
+
 ### 1.6a Project folder layout
 `project_folder_layout` in `config.yaml` (also in the setup window) controls where new project folders go:
 - `customer/so` (default): `<vault>\Medimmune\SO-295546`. The customer folder is created if needed, and an existing one is reused even if its capitalisation differs. Without an SO the folder is named after the QTE, then the project number. The note inside is `SO-295546.md`; the project number, customer and so on stay in its frontmatter.
@@ -479,6 +502,8 @@ Ticks made outside the hub (typed directly in the `.md`) show up in the note but
 | Symptom | What to check |
 |---|---|
 | `http://localhost:8765` doesn't load | The hub isn't running. Run `Start-ScheduledTask -TaskName ProjectHub`, or double-click `run_hub.cmd` to see errors. Hidden-mode errors go to `output\hub.log`. |
+| A config, rules or code change isn't showing | Restart the hub (see 1.5a). |
+| "403 forbidden" when clicking a button | The page was opened before a hub restart. Reload it. Also use `localhost` or `127.0.0.1`, not the computer name. |
 | No new emails appear | Classic Outlook must be installed and signed in; "New Outlook" can't be read. See `output\hub_last_run.log` and `output\last_run.log`. |
 | Refresh seems stuck | Outlook may be showing a dialog. Bring it to the front. The tracker gives up after 10 minutes. |
 | A project isn't picked up | The folder must be a direct child of the vault and its name or note must contain the SO-/QTE- number or the 7-digit project number. `General` and folders starting with `.` are skipped. |
