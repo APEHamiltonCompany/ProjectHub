@@ -27,6 +27,7 @@ from tracker import projects as projects_mod
 from tracker import rules as rules_mod
 from tracker import settings as settings_mod
 from tracker import state as state_mod
+from tracker import support_email as support_mod
 from tracker import team as team_mod
 from tracker.hub import tasks as tasks_mod
 from tracker.hub import timesheet as timesheet_mod
@@ -1067,6 +1068,8 @@ def create_app(
         for title, url in (
             ("Project page", project.get("sharepoint")),
             ("CPR", project.get("cpr")),
+            ("Current DR", project.get("design_review")),
+            *(("Previous DR", url) for url in support_mod.previous_drs(project)),
             ("Risk & Issues", project.get("rmt")),
         ):
             if url and url not in seen and _is_http(url):
@@ -3827,6 +3830,26 @@ def create_app(
     @app.get("/team/view.js")
     def team_view_js():
         return send_file(team_mod.VIEW_SOURCE, mimetype="text/javascript", max_age=0)
+
+    @app.post("/api/project/support-email")
+    def api_support_email():
+        payload = request.get_json(silent=True) or {}
+        project = project_by_key(str(payload.get("key") or ""))
+        if project is None:
+            return jsonify({"error": "unknown project"}), 404
+        teams, problem = support_mod.load_territory(cfg, fresh=bool(payload.get("fresh")))
+        roster = team_info()["roster"]
+        manager = next((r.get("name") for r in roster if str(r.get("role") or "").lower() == "manager"), "") or support_mod.DEFAULT_MANAGER
+        known = support_mod.known_names(outlook_com._cache_path(cfg))
+        draft = support_mod.build_draft(project, teams, date.today(), manager=manager, known=known)
+        opener = app.config.get("DRAFT_OPENER") or support_mod.open_draft
+        try:
+            unresolved = opener(cfg, draft)
+        except Exception as exc:
+            return jsonify({"error": "Outlook could not create the draft: %s" % exc}), 500
+        missing = ([problem] if problem else []) + draft["missing"]
+        missing += ["not found in Outlook: %s" % name for name in unresolved or []]
+        return jsonify({"ok": True, "to": draft["to"], "cc": draft["cc"], "missing": missing})
 
     @app.post("/api/team/reassign")
     def api_team_reassign():

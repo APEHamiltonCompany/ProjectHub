@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from typing import Optional
+from urllib.parse import unquote
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\ufeff\u00a0]")
 LINK_RE = re.compile(r"<((?:https?://)[^>\s]+)>")
@@ -18,6 +19,7 @@ CHECK_ITEM_RE = re.compile(r"^\s*(?:\u2610|\[\s*\])\s*(.+)$")
 PROJECT_PAGE_LABEL = r"Project\s+page"
 CPR_LABEL = r"CPR(?:\s+form)?"
 RMT_LABEL = r"Risk(?:s)?\s*(?:&|and)\s*Issues\s+document"
+DR_FORM_LABEL = r"\b(?:Previous\s+)?DR(?:\s+form)?\b"
 LEVEL_RE = re.compile(r"Project\s+level\s*:\s*(\S+)", re.I)
 SHIP_DATE_RE = re.compile(r"Ship\s+date\s*:\s*(.+)", re.I)
 DESIGN_NEED_BY_RE = re.compile(r"Design\s+need-by\s+date\s*:\s*(.+)", re.I)
@@ -260,9 +262,16 @@ def parse_kickoff_body(body: str) -> dict:
         design_text = match.group(1).strip()
     ship_date = parse_us_date(ship_date_text)
     design_need_by = parse_us_date(design_text)
+    cpr = _label_url(lines, CPR_LABEL)
+    dr_form = _label_url(lines, DR_FORM_LABEL)
+    if cpr and is_design_review_url(cpr):
+        # Repeat projects: the "CPR form" line holds the previous design review instead.
+        dr_form = dr_form or cpr
+        cpr = ""
     return {
         "project_page": _label_url(lines, PROJECT_PAGE_LABEL),
-        "cpr": _label_url(lines, CPR_LABEL),
+        "cpr": cpr,
+        "dr_form": dr_form,
         "rmt": _label_url(lines, RMT_LABEL),
         "level": level,
         "ship_date": ship_date.isoformat() if ship_date else None,
@@ -292,6 +301,123 @@ def extract_links(body: str) -> list[dict]:
                 continue
             links[url] = {"title": _link_title(line[: match.start()]), "url": url}
     return list(links.values())
+
+
+def is_slides_url(url: str) -> bool:
+    lowered = (url or "").lower()
+    return "/:p:/" in lowered or ".pptx" in lowered
+
+
+def is_design_review_url(url: str) -> bool:
+    """A PowerPoint link, or a file named DesignReview / Design Review / DR-<number>."""
+    if is_slides_url(url):
+        return True
+    name = re.sub(r"[\s_\-]+", "", unquote(url or "").lower())
+    return "designreview" in name
+
+
+def design_review_link(body: str) -> str:
+    """The design review deck in a DR email: the slides link, preferring one named after a design review."""
+    slides = [link for link in extract_links(body) if is_slides_url(link["url"])]
+    for link in slides:
+        if re.search(r"design[\s_-]*review|\bDR\b", link["title"] + " " + unquote(link["url"]), re.I):
+            return link["url"]
+    return slides[0]["url"] if slides else ""
+
+
+PROJECT_NO_RE = re.compile(r"(?<!\d)020\d{4}(?!\d)")
+REVISION_RE = re.compile(r"(?<![a-z])rev[\s._-]*([a-z])(?![a-z])((?:[\s._-]*\d+)*)", re.I)
+DR_SUBJECT_RE = re.compile(r"(?i:design[\s_-]*review)|(?<![A-Za-z])DR(?![A-Za-z])")
+DR_LABEL_RE = re.compile(r"(?:current\s+)?design[\s_-]*review(?:\s+(?:deck|slides|link))?", re.I)
+SUPPORT_SUBJECT_RE = re.compile(r"applications\s+project\s+support", re.I)
+
+
+def link_file_name(link: dict) -> str:
+    """The file name in a SharePoint link (file= parameter or the last path part), else the text before the link."""
+    url = unquote((link.get("url") or "").replace("+", " "))
+    match = re.search(r"[?&]file=([^&]+)", url)
+    name = match.group(1) if match else url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    if "." not in name:
+        title = link.get("title") or ""
+        found = re.search(r"[^\s:]+(?:\s[^\s:]+)*\.(?:pptx?|pdf)\b", title, re.I)
+        name = found.group(0) if found else title
+    return name.strip()
+
+
+def is_design_review_deck(name: str) -> bool:
+    """A file named DesignReview / Design Review / DR-<number>."""
+    flat = re.sub(r"[\s_\-\[\]]+", "", name.lower())
+    return "designreview" in flat or bool(re.match(r"dr[\s_\-\[]*020\d{4}", name.strip().lower()))
+
+
+def deck_numbers(name: str) -> set[str]:
+    return set(PROJECT_NO_RE.findall(name or ""))
+
+
+def deck_revision(name: str) -> tuple | None:
+    """'..._RevB.4.0.pptx' -> ('B', (4, 0)); None when the name carries no revision."""
+    matches = REVISION_RE.findall(name or "")
+    if not matches:
+        return None
+    letter, digits = matches[-1]
+    return letter.upper(), tuple(int(part) for part in re.findall(r"\d+", digits))
+
+
+def is_newer_revision(new: str, old: str) -> bool:
+    """True only when both names carry a revision and new's is later (RevA < RevB, RevB.3.0 < RevB.4.0)."""
+    new_rev, old_rev = deck_revision(new), deck_revision(old)
+    return bool(new_rev and old_rev and new_rev > old_rev)
+
+
+def is_support_email(subject: str) -> bool:
+    return bool(SUPPORT_SUBJECT_RE.search(subject or ""))
+
+
+def design_reviews(emails: list, own: set[str], kickoff_previous: str = "") -> tuple[str, list[str]]:
+    """(current DR, previous DRs) from a project's emails, oldest first.
+
+    Current: a design review deck named with one of the project's 020 numbers (own, or a number in that email's
+    subject), or a slides link in a design review email when the deck carries no number. A later deck replaces it
+    only when its revision is verifiably newer. Previous: the kickoff's "Previous DR" link and decks named for
+    another 020 number (or unnumbered decks outside DR emails). "Applications Project Support" emails are skipped."""
+    current, current_name = "", ""
+    previous: list[tuple[str, str]] = []
+    kickoff_name = link_file_name({"url": kickoff_previous}).lower() if kickoff_previous else ""
+
+    def consider(url: str, name: str, is_current: bool) -> None:
+        nonlocal current, current_name
+        if is_current:
+            if not current:
+                current, current_name = url, name
+            elif name.lower() != current_name.lower() and is_newer_revision(name, current_name):
+                current, current_name = url, name
+            return
+        key = (name or url).lower()
+        if all(key != (item_name or item_url).lower() and url != item_url for item_url, item_name in previous):
+            previous.append((url, name))
+
+    if kickoff_previous:
+        consider(kickoff_previous, kickoff_name, bool(deck_numbers(kickoff_name) & own))
+    for email in sorted(emails, key=lambda item: item.date):
+        if is_support_email(email.subject):
+            continue
+        mine = own | deck_numbers(email.subject)
+        dr_email = bool(DR_SUBJECT_RE.search(email.subject or ""))
+        for link in extract_links(email.body_text):
+            url = link["url"]
+            name = link_file_name(link)
+            deck = is_design_review_deck(name)
+            if not deck and not (dr_email and is_slides_url(url)):
+                continue
+            numbers = deck_numbers(name)
+            if kickoff_previous and (url == kickoff_previous or (kickoff_name and name.lower() == kickoff_name)):
+                consider(url, name, bool(numbers & own))
+            elif numbers:
+                consider(url, name, bool(numbers & mine))
+            else:
+                consider(url, name, dr_email or bool(DR_LABEL_RE.fullmatch(name)))
+    out = [url for url, name in previous if url != current and (name or url).lower() != current_name.lower()]
+    return current, out
 
 
 def strip_project_prefix(name: str) -> str:

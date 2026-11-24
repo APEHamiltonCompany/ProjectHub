@@ -246,9 +246,12 @@ def collect_trigger_dates(
     dry_run: bool,
     created: list[dict] | None = None,
     archive_numbers: set[str] | None = None,
+    related: dict | None = None,
 ) -> tuple[dict, list[dict], dict, dict]:
     """created: a list to collect automatically created projects in; None = assignments wait in the hub.
-    archive_numbers: numbers of old _Archive folders; their assignments always wait in the hub."""
+    archive_numbers: numbers of old _Archive folders; their assignments always wait in the hub.
+    related: a dict to collect every email matched to a project in ({key: [Email]}), replies and
+    emails without a trigger included; used only to look for links."""
     triggers: dict[str, dict[str, date]] = {}
     unmatched: list[dict] = []
     matched: dict[str, list[tuple[Email, str, bool]]] = {}
@@ -304,6 +307,9 @@ def collect_trigger_dates(
                 reason = "no matching project" if trigger else "no matching project, no trigger"
                 unmatched.append(unmatched_entry(local_date, email, reason, keys))
                 continue
+
+        if related is not None:
+            related.setdefault(project.key, []).append(email)
 
         if reply and forced is None:
             continue
@@ -858,9 +864,14 @@ def apply_due_overrides(
     return dues
 
 
-def project_info(matched: dict) -> dict[str, dict]:
+def project_info(matched: dict, related: dict | None = None, numbers: dict | None = None) -> dict[str, dict]:
+    """related: {key: [Email]} every email matched to the project (replies too), searched for design reviews.
+    numbers: {key: set of the project's 020 numbers}."""
     info: dict[str, dict] = {}
-    for key, items in matched.items():
+    related = related or {}
+    numbers = numbers or {}
+    for key in set(matched) | set(related):
+        items = matched.get(key) or []
         assignment = None
         kickoff = None
         for email, trigger_id, reply in items:
@@ -873,6 +884,8 @@ def project_info(matched: dict) -> dict[str, dict]:
         entry = {
             "sharepoint": "",
             "cpr": "",
+            "design_review": "",
+            "previous_dr": [],
             "rmt": "",
             "ship_date": "",
             "design_need_by": "",
@@ -891,11 +904,20 @@ def project_info(matched: dict) -> dict[str, dict]:
             entry["ship_date"] = parsed["ship_date"] or ""
             entry["design_need_by"] = parsed["design_need_by"] or ""
             entry["level"] = parsed["level"] or ""
+        searched = {id(email): email for email, _trigger, _reply in items}
+        searched.update({id(email): email for email in related.get(key) or []})
+        entry["design_review"], entry["previous_dr"] = extract.design_reviews(
+            list(searched.values()),
+            set(numbers.get(key) or ()),
+            extract.parse_kickoff_body(kickoff.body_text)["dr_form"] if kickoff is not None else "",
+        )
         links: list[dict] = []
         seen: set[str] = set()
         for title, url in (
             ("Project page", entry["sharepoint"]),
             ("CPR", entry["cpr"]),
+            ("Current DR", entry["design_review"]),
+            *(("Previous DR", url) for url in entry["previous_dr"]),
             ("Risk & Issues document", entry["rmt"]),
         ):
             if url and url not in seen:
@@ -1034,6 +1056,8 @@ def build_snapshot(
             row = {
                 "date": email.date.astimezone().isoformat(timespec="seconds"),
                 "sender": email.sender,
+                "to": email.to,
+                "cc": email.cc,
                 "subject": email.subject,
                 "trigger": trigger_id,
                 "reply": reply,
@@ -1091,6 +1115,8 @@ def build_snapshot(
                 "design_need_by": entry.get("design_need_by", ""),
                 "sharepoint": entry.get("sharepoint", ""),
                 "cpr": entry.get("cpr", ""),
+                "design_review": entry.get("design_review", ""),
+                "previous_dr": list(entry.get("previous_dr") or []),
                 "rmt": entry.get("rmt", ""),
                 "team": list(entry.get("team") or []),
                 "links": list(entry.get("links") or []),
@@ -1269,13 +1295,16 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
     if block and cfg.get("auto_create_projects"):
         out("automatic project creation skipped: %s" % block)
     created: list[dict] | None = None if block else []
+    related: dict = {}
     triggers, unmatched, pending, matched = collect_trigger_dates(
         cfg, rules, projects, index, emails, stored_state, args.dry_run, created=created,
-        archive_numbers=old_archive_numbers(cfg) if created is not None else None,
+        archive_numbers=old_archive_numbers(cfg) if created is not None else None, related=related,
     )
     if created:
         out("projects created automatically: %d" % len(created))
-    info = project_info(matched)
+    info = project_info(
+        matched, related, {project.key: extract.deck_numbers(project.project_no or "") for project in projects}
+    )
     sheet = None
     sheet_matches: dict[str, dict] = {}
     try:
@@ -1404,6 +1433,12 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
         if not project.note_path or (args.dry_run and not notes.lp(project.note_path).is_file()):
             continue
         project_entry = info.get(project.key) or {}
+        try:
+            note_data = notes.split_frontmatter(notes.read_text(project.note_path)[0])[0]
+        except OSError:
+            note_data = {}
+        if project_entry:
+            project_entry["design_review"] = notes.current_dr(note_data.get("design_review"), project_entry.get("design_review", ""))
         updates = {
             "project_no": project.project_no,
             "so": project.so,
@@ -1416,6 +1451,8 @@ def run(args: argparse.Namespace, cfg: dict, config_path: Path) -> int:
             else project.assigned,
             "sharepoint": project_entry.get("sharepoint", ""),
             "cpr": project_entry.get("cpr", ""),
+            "design_review": project_entry.get("design_review", ""),
+            "previous_dr": list(project_entry.get("previous_dr") or []),
             "rmt": project_entry.get("rmt", ""),
             "ship_date": project_entry.get("ship_date", ""),
             "design_need_by": project_entry.get("design_need_by", ""),

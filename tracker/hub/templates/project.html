@@ -222,11 +222,13 @@
     {% endif %}
 
     <section class="panel">
-      <div class="panel-head"><h2>Links</h2><span class="small muted">{{ links|length }}</span></div>
+      <div class="panel-head"><h2>Links</h2><span class="small muted">{{ links|length }}</span>
+        <button type="button" class="btn small" data-action="support-email" data-key="{{ project.key }}" title="Open an Applications Project Support draft in Outlook (not sent)">Project Support Email</button></div>
       <ul class="link-list">
         {% for link in links %}
         <li>
-          <span class="link-icon link-icon-{{ 'sharepoint' if link.title == 'Project page' else 'cpr' if link.title == 'CPR' else 'rmt' if link.title == 'Risk & Issues' else 'other' }}">{{ 'SP' if link.title == 'Project page' else 'CPR' if link.title == 'CPR' else 'RMT' if link.title == 'Risk & Issues' else 'LINK' }}</span>
+          {% set is_dr = link.title in ('Current DR', 'Previous DR') %}
+          <span class="link-icon link-icon-{{ 'sharepoint' if link.title == 'Project page' else 'cpr' if link.title == 'CPR' or is_dr else 'rmt' if link.title == 'Risk & Issues' else 'other' }}">{{ 'SP' if link.title == 'Project page' else 'CPR' if link.title == 'CPR' else 'DR' if is_dr else 'RMT' if link.title == 'Risk & Issues' else 'LINK' }}</span>
           <a class="link-item" href="{{ link.url }}" target="_blank" rel="noopener">{{ link.title }}</a>
           {% if link.user %}
           <button type="button" class="btn small ghost danger" data-action="link-remove" data-key="{{ project.key }}" data-url="{{ link.url }}">Remove</button>

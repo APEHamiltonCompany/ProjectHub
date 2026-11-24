@@ -13,13 +13,13 @@
     open: "No date"
   };
 
-  function toast(message) {
+  function toast(message, ms) {
     var box = document.getElementById("hub-toast");
     if (!box) { return; }
     box.textContent = message;
     box.hidden = false;
     window.clearTimeout(toast._timer);
-    toast._timer = window.setTimeout(function () { box.hidden = true; }, 4000);
+    toast._timer = window.setTimeout(function () { box.hidden = true; }, ms || 4000);
   }
 
   function post(url, body) {
@@ -763,6 +763,7 @@
     if (action === "launch-none") { return clearLaunch(target); }
     if (action === "link-add") { return addLink(target); }
     if (action === "link-remove") { return removeLink(target); }
+    if (action === "support-email") { return supportEmail(target); }
     if (action === "task-link-add") { return taskLinkAdd(target); }
     if (action === "task-link-remove") { return taskLinkRemove(target); }
     if (action === "task-folder-set") { return taskFolderSet(target); }
@@ -1639,6 +1640,14 @@
       title: title ? title.value : "",
       url: url ? url.value : ""
     }).then(function () { window.location.reload(); }).catch(fail);
+  }
+
+  function supportEmail(button) {
+    busy(button, true);
+    post("/api/project/support-email", { key: button.getAttribute("data-key") }).then(function (data) {
+      var missing = data.missing || [];
+      toast("Draft opened in Outlook." + (missing.length ? " Fill in: " + missing.join("; ") : ""), missing.length ? 15000 : 4000);
+    }).catch(fail).then(function () { busy(button, false); });
   }
 
   function removeLink(button) {

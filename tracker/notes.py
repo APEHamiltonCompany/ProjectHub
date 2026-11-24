@@ -10,6 +10,7 @@ from typing import Iterable, Optional
 
 import yaml
 
+from . import extract
 from .models import Task
 
 BLOCK_START = "<!-- tracker:start (auto-managed; tick boxes freely) -->"
@@ -38,6 +39,8 @@ FRONTMATTER_KEYS = [
     "tracker_updated",
     "sharepoint",
     "cpr",
+    "design_review",
+    "previous_dr",
     "rmt",
     "ship_date",
     "design_need_by",
@@ -124,12 +127,33 @@ def dump_frontmatter(data: dict) -> str:
     return "---\n" + "\n".join(lines) + "\n---\n"
 
 
+def current_dr(existing, new: str) -> str:
+    """The note's current design review: filled when empty, replaced only by a verifiably newer revision."""
+    existing = "" if is_empty(existing) else str(existing)
+    if not existing or not new:
+        return existing or new or ""
+    if extract.is_newer_revision(extract.link_file_name({"url": new}), extract.link_file_name({"url": existing})):
+        return new
+    return existing
+
+
 def merge_frontmatter(data: dict, updates: dict) -> dict:
     merged = dict(data)
+    if "dr_form" in merged:
+        old = merged.pop("dr_form")
+        previous = merged.get("previous_dr")
+        previous = [] if is_empty(previous) else (previous if isinstance(previous, list) else [previous])
+        if not is_empty(old) and old not in previous:
+            previous.insert(0, old)
+        if previous:
+            merged["previous_dr"] = previous
     for key, value in updates.items():
         if value is None:
             continue
         if key in FILL_ONLY_KEYS and not is_empty(merged.get(key)):
+            continue
+        if key == "design_review":
+            merged[key] = current_dr(merged.get(key), value)
             continue
         if isinstance(value, (list, tuple)):
             existing = merged.get(key)
@@ -144,6 +168,14 @@ def merge_frontmatter(data: dict, updates: dict) -> dict:
             merged[key] = [value] if value else []
         else:
             merged[key] = value
+    if isinstance(merged.get("previous_dr"), list) and not is_empty(merged.get("design_review")):
+        current = extract.link_file_name({"url": str(merged["design_review"])}).lower()
+        merged["previous_dr"] = [
+            url for url in merged["previous_dr"]
+            if url != merged["design_review"] and not (current and extract.link_file_name({"url": str(url)}).lower() == current)
+        ]
+        if not merged["previous_dr"]:
+            merged.pop("previous_dr")
     ordered = {}
     for key in FRONTMATTER_KEYS:
         if key in merged:
