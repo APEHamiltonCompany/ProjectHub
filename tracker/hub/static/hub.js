@@ -735,6 +735,9 @@
     if (action === "auto-created-dismiss") {
       return post("/api/auto-created/dismiss", { key: target.getAttribute("data-key") || "" }).then(function () { window.location.reload(); }).catch(fail);
     }
+    if (action === "owner-flag-dismiss") {
+      return post("/api/owner-flags/dismiss", { key: target.getAttribute("data-key") || "" }).then(function () { window.location.reload(); }).catch(fail);
+    }
     if (action === "team-reassign") { return teamReassignOpen(target); }
     if (action === "team-reassign-cancel") { document.getElementById("team-reassign-box").hidden = true; return; }
     if (action === "team-reassign-send") { return teamReassignSend(target); }

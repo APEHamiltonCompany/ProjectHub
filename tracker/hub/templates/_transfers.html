@@ -36,10 +36,10 @@
 {% endif %}
 {% if owner_flags %}
 <section class="pending" id="owner-flags">
-  <div class="pending-head"><span class="badge">Owner mismatch</span><h3>{{ owner_flags|length }} project{{ "" if owner_flags|length == 1 else "s" }}</h3></div>
+  <div class="pending-head"><span class="badge">Owner mismatch</span><h3>{{ owner_flags|length }} project{{ "" if owner_flags|length == 1 else "s" }}</h3> <button type="button" class="btn small" data-action="owner-flag-dismiss" data-key="">Dismiss all</button></div>
   <p class="small muted">The schedule or the APE sheet names someone else. Nothing moves by itself: ask the manager to reassign, or fix the schedule or sheet.</p>
   <ul class="small">
-  {% for p in owner_flags %}<li><a href="{{ url_for('project_page', key=p.key) }}">{{ p.name }}</a>: {{ p.owner_flags|join("; ") }}</li>{% endfor %}
+  {% for p in owner_flags %}<li><a href="{{ url_for('project_page', key=p.key) }}">{{ p.name }}</a>: {{ p.owner_flags|join("; ") }} <button type="button" class="btn small ghost" data-action="owner-flag-dismiss" data-key="{{ p.key }}">Dismiss</button></li>{% endfor %}
   </ul>
 </section>
 {% endif %}

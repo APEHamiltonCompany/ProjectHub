@@ -1758,7 +1758,7 @@ def create_app(
             auto_created=list(reversed(auto_created)),
             auto_create=snap.get("auto_create") or {},
             team=team_info() if team_mod.conf(cfg).get("publish") or team_mod.conf(cfg).get("manager_mode") else None,
-            owner_flags=[p for p in snap.get("projects") or [] if p.get("owner_flags") and not p.get("archived")],
+            owner_flags=visible_owner_flags(snap, state),
             pending=pending_rows,
             folders=folder_choices() if pending_rows else [],
             overdue=overdue,
@@ -3000,6 +3000,14 @@ def create_app(
 
     def append_personal(text: str, lines: list[str]) -> str:
         body = text if text.endswith("\n") else text + "\n"
+        rows = body.split("\n")
+        for index, row in enumerate(rows):
+            if row.strip() != tasks_mod.ARCHIVE_HEADING:
+                continue
+            while index > 0 and rows[index - 1].strip() == "":
+                index -= 1
+            rows[index:index] = list(lines)
+            return "\n".join(rows)
         return body + "\n".join(lines) + "\n"
 
     @app.get("/api/tasks")
@@ -3771,6 +3779,34 @@ def create_app(
         import_job.update(running=True, phase="create", message="Creating projects...", error="", result=None)
         threading.Thread(target=import_create_job, args=(picked,), daemon=True).start()
         return jsonify({"ok": True, "started": True, "count": len(picked)})
+
+    def visible_owner_flags(snap: dict, state: dict) -> list[dict]:
+        dismissed = state.get("owner_flag_dismissed") or {}
+        rows = []
+        for p in snap.get("projects") or []:
+            if p.get("archived"):
+                continue
+            left = [f for f in p.get("owner_flags") or [] if f not in (dismissed.get(p.get("key")) or [])]
+            if left:
+                rows.append({**p, "owner_flags": left})
+        return rows
+
+    @app.post("/api/owner-flags/dismiss")
+    def api_owner_flags_dismiss():
+        payload = request.get_json(silent=True) or {}
+        key = str(payload.get("key") or "")
+        snap = snapshot()
+
+        def apply(state: dict) -> int:
+            store = state.setdefault("owner_flag_dismissed", {})
+            count = 0
+            for p in snap.get("projects") or []:
+                if p.get("owner_flags") and (not key or p.get("key") == key):
+                    store[p["key"]] = list(p["owner_flags"])
+                    count += 1
+            return count
+
+        return jsonify({"ok": True, "dismissed": mutate_state(apply)})
 
     @app.post("/api/auto-created/dismiss")
     def api_auto_created_dismiss():

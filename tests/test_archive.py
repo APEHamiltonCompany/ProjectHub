@@ -176,6 +176,21 @@ class ArchiveApiTests(unittest.TestCase):
         self.assertEqual(self.post("/api/tasks/archive", {"key": "", "id": "p0207000-review"}).status_code, 400)
         self.assertEqual(self.post("/api/tasks/unarchive", {"key": "", "id": "p0207000-review"}).status_code, 400)
 
+    def test_new_personal_task_not_archived_when_archive_is_last(self):
+        self.assertEqual(self.post("/api/tasks/archive", {"key": "", "id": OTHER_ID}).status_code, 200)
+        self.assertTrue(self.personal.read_text(encoding="utf-8").rstrip().endswith(OTHER_ID))
+        added = self.post("/api/tasks/add", {"key": "", "description": "Fresh task", "notes": "some detail"})
+        self.assertEqual(added.status_code, 200)
+        new_id = added.get_json()["id"]
+        text = self.personal.read_text(encoding="utf-8")
+        self.assertLess(text.index("Fresh task"), text.index("**Archived**"))
+        self.assertEqual([row["id"] for row in tasks_mod.parse_lines(text)], [TASK_ID, new_id])
+        self.assertEqual([row["id"] for row in tasks_mod.parse_lines(text, archived=True)], [OTHER_ID])
+        fresh = next(row for row in tasks_mod.parse_lines(text) if row["id"] == new_id)
+        self.assertEqual(fresh["notes"], "some detail")
+        html = self.dashboard()
+        self.assertIn('data-action="task-archive" data-key="" data-id="%s"' % new_id, html)
+
 
 if __name__ == "__main__":
     unittest.main()
